@@ -1,8 +1,11 @@
 import axios from "axios";
 import type {
+  BalancePreviewPayload,
+  BalanceReport,
   ClassSection,
   DashboardData,
   DepartmentSetupResult,
+  DepartmentsResponse,
   GenerateResult,
   RoutineEntry,
   ScheduleConfig,
@@ -23,7 +26,20 @@ export function errorMessage(err: unknown): string {
 
 // Dashboard / seed
 export const fetchDashboard = () => api.get<DashboardData>("/dashboard").then((r) => r.data);
-export const seedDemo = () => api.post<{ message: string }>("/seed").then((r) => r.data);
+export const seedDemo = () =>
+  api
+    .post<{ message: string; counts: { teachers: number; subjects: number; classes: number } }>(
+      "/seed",
+    )
+    .then((r) => r.data);
+
+// Departments — several departments coexist; switching never deletes.
+export const fetchDepartments = () =>
+  api.get<DepartmentsResponse>("/departments").then((r) => r.data);
+export const activateDepartment = (id: string) =>
+  api.post<{ message: string }>(`/departments/${id}/activate`).then((r) => r.data);
+export const deleteDepartment = (id: string) =>
+  api.delete<{ message: string }>(`/departments/${id}`).then((r) => r.data);
 export const clearRoutine = () => api.post<{ message: string }>("/routine/clear").then((r) => r.data);
 export const generateRoutine = () =>
   api.post<GenerateResult>("/routine/generate").then((r) => r.data);
@@ -60,7 +76,7 @@ export const deleteClassSubject = (classId: string, subjectId: string) =>
 export const fetchConfig = () => api.get<ScheduleConfig>("/config").then((r) => r.data);
 export const saveConfig = (cfg: ScheduleConfig) => api.put("/config", cfg);
 
-// New Department wizard — one call replaces the workspace department.
+// New Department wizard — creates an ADDITIONAL department (nothing is deleted).
 export const setupDepartment = (payload: WizardPayload) =>
   api.post<DepartmentSetupResult>("/setup/department", payload).then((r) => r.data);
 
@@ -74,3 +90,8 @@ export const swapEntries = (entryA: string, entryB: string) =>
 
 // Validation
 export const fetchValidation = () => api.get<ValidationData>("/validation").then((r) => r.data);
+
+// Load balance — coverage (hours left per subject) + suggested teacher loads
+export const fetchBalance = () => api.get<BalanceReport>("/balance").then((r) => r.data);
+export const previewBalance = (payload: BalancePreviewPayload) =>
+  api.post<BalanceReport>("/balance/preview", payload).then((r) => r.data);

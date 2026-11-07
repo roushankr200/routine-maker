@@ -14,6 +14,29 @@ import {
   unavailableKey,
 } from "./solver/types.js";
 import { classLabel } from "./demoData.js";
+import { getActiveDepartment, scope } from "./departments.js";
+
+/**
+ * The solver-facing config: the institute-fixed grid from Config, with
+ * the department identity (name / short / session / w.e.f.) merged in
+ * from the ACTIVE Department document, so the master-sheet masthead
+ * always shows the department the user is working on. Falls back to
+ * the Config identity fields when no department exists yet.
+ */
+export async function mergedScheduleConfig(): Promise<ScheduleConfig> {
+  const [cfg, dept] = await Promise.all([getOrCreateConfig(), getActiveDepartment()]);
+  return {
+    days: cfg.days,
+    periodsPerDay: cfg.periodsPerDay,
+    lunchAfter: cfg.lunchAfter ?? null,
+    periodDuration: cfg.periodDuration,
+    startTime: cfg.startTime,
+    session: dept?.session ?? cfg.session,
+    effectiveFrom: dept?.effectiveFrom ?? cfg.effectiveFrom,
+    department: dept?.name ?? cfg.department,
+    departmentShort: dept?.shortName ?? cfg.departmentShort,
+  };
+}
 
 export interface SolverDataset {
   teachers: Map<string, TeacherData>;
@@ -23,15 +46,20 @@ export interface SolverDataset {
   classNames: Map<string, string>;
 }
 
-/** Convert the MongoDB documents into the solver's plain-data shapes. */
+/**
+ * Convert the ACTIVE department's MongoDB documents into the solver's
+ * plain-data shapes. Other departments' data is never loaded.
+ */
 export async function loadSolverData(): Promise<SolverDataset> {
-  const [teacherDocs, subjectDocs, csDocs, unavDocs, classDocs, cfg] = await Promise.all([
-    Teacher.find().sort({ name: 1 }),
-    Subject.find().sort({ code: 1 }),
-    ClassSubject.find(),
-    TeacherUnavailable.find(),
-    ClassSection.find(),
-    getOrCreateConfig(),
+  const dept = await getActiveDepartment();
+  const filter = dept ? scope(dept._id.toString()) : { departmentId: { $exists: false } };
+  const [teacherDocs, subjectDocs, csDocs, unavDocs, classDocs, config] = await Promise.all([
+    Teacher.find(filter).sort({ name: 1 }),
+    Subject.find(filter).sort({ code: 1 }),
+    ClassSubject.find(filter),
+    TeacherUnavailable.find(filter),
+    ClassSection.find(filter),
+    mergedScheduleConfig(),
   ]);
 
   const unavByTeacher = new Map<string, Set<string>>();
@@ -77,17 +105,6 @@ export async function loadSolverData(): Promise<SolverDataset> {
     classNames.set(c._id.toString(), classLabel(c.program, c.year, c.section));
   }
 
-  const config: ScheduleConfig = {
-    days: cfg.days,
-    periodsPerDay: cfg.periodsPerDay,
-    lunchAfter: cfg.lunchAfter ?? null,
-    periodDuration: cfg.periodDuration,
-    startTime: cfg.startTime,
-    session: cfg.session,
-    effectiveFrom: cfg.effectiveFrom,
-    department: cfg.department,
-    departmentShort: cfg.departmentShort,
-  };
   return { teachers, subjects, classSubjects, config, classNames };
 }
 

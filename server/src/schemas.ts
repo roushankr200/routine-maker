@@ -105,6 +105,53 @@ export const wizardTeacherSchema = z.object({
   unavailableDay: z.string().trim().max(20).nullable().default(null),
 });
 
+// ------------------------------------------------------- load balance
+/**
+ * POST /api/balance/preview — the wizard's coverage & balance panel.
+ *
+ * Same code-based cross-references as the department payload (courses
+ * and mapping by CODE, classes by index), but deliberately more
+ * lenient: the panel runs on half-typed wizard state, so teacher names
+ * may still be blank and courses may carry just a code. Structural
+ * problems (hours out of range, references to unknown course codes,
+ * duplicate codes) are rejected by the route with a problems list.
+ */
+export const balancePreviewSchema = z.object({
+  classes: z.array(classSchema).max(40).default([]),
+  subjects: z
+    .array(
+      z.object({
+        code: z.string().trim().min(1, "course code is required"),
+        name: z.string().trim().default(""),
+        type: z.enum(["theory", "lab"]).default("theory"),
+        sessionHours: z.coerce.number().int().min(1).max(3).optional(),
+      }),
+    )
+    .min(1, "at least one course is required")
+    .max(80),
+  teachers: z
+    .array(
+      z.object({
+        name: z.string().trim().default(""),
+        code: z.string().trim().max(12).default(""),
+        weeklyHours: z.coerce.number().int().min(0).max(80),
+        /** Courses this teacher can teach — course CODES. */
+        subjects: z.array(z.string().trim().min(1)).default([]),
+      }),
+    )
+    .min(1, "at least one teacher is required")
+    .max(80),
+  classSubjects: z
+    .array(
+      z.object({
+        classIndex: z.coerce.number().int().min(0),
+        subjectCode: z.string().trim().min(1),
+        hours: z.coerce.number().int().min(0).max(60),
+      }),
+    )
+    .default([]),
+});
+
 export const departmentSetupSchema = z.object({
   department: z.object({
     name: z.string().trim().min(1, "department name is required").max(80),

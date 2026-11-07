@@ -13,7 +13,43 @@ import mongoose, { HydratedDocument, Schema, Types } from "mongoose";
  *                    a session occupies several consecutive rows)
  */
 
+/**
+ * Department — one institute department (CSE, ECE, …). Departments
+ * coexist: each owns its own teachers / subjects / classes / routine,
+ * scoped by `departmentId` on every data document. Creating a
+ * department NEVER touches another department's data; a department is
+ * removed only by the explicit DELETE /api/departments/:id action.
+ */
+export interface IDepartment {
+  name: string;
+  shortName: string;
+  /** Session label printed on the master sheet, e.g. "ODD 2026". */
+  session: string;
+  /** "w.e.f." date text printed on the master sheet, e.g. "27/07/2026". */
+  effectiveFrom: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+const departmentSchema = new Schema<IDepartment>(
+  {
+    name: { type: String, required: true },
+    shortName: { type: String, required: true },
+    session: { type: String, default: "ODD 2026" },
+    effectiveFrom: { type: String, default: "" },
+  },
+  { timestamps: true },
+);
+export const Department = mongoose.model<IDepartment>("Department", departmentSchema);
+
+const departmentRef = {
+  type: Schema.Types.ObjectId,
+  ref: "Department",
+  required: true,
+  index: true,
+} as const;
+
 export interface ITeacher {
+  departmentId: Types.ObjectId;
   name: string;
   /** Short faculty code as printed on the master sheet, e.g. "DJB". */
   code: string;
@@ -24,6 +60,7 @@ export interface ITeacher {
   subjects: Types.ObjectId[];
 }
 const teacherSchema = new Schema<ITeacher>({
+  departmentId: departmentRef,
   name: { type: String, required: true },
   code: { type: String, default: "" },
   designation: { type: String, default: "" },
@@ -34,6 +71,7 @@ const teacherSchema = new Schema<ITeacher>({
 export const Teacher = mongoose.model<ITeacher>("Teacher", teacherSchema);
 
 export interface ISubject {
+  departmentId: Types.ObjectId;
   name: string;
   code: string;
   type: "theory" | "lab";
@@ -44,6 +82,7 @@ export interface ISubject {
   sessionHours: number;
 }
 const subjectSchema = new Schema<ISubject>({
+  departmentId: departmentRef,
   name: { type: String, required: true },
   code: { type: String, required: true },
   type: { type: String, enum: ["theory", "lab"], required: true },
@@ -57,11 +96,13 @@ const subjectSchema = new Schema<ISubject>({
 export const Subject = mongoose.model<ISubject>("Subject", subjectSchema);
 
 export interface IClassSection {
+  departmentId: Types.ObjectId;
   program: string;
   year: string;
   section: string;
 }
 const classSectionSchema = new Schema<IClassSection>({
+  departmentId: departmentRef,
   program: { type: String, required: true },
   year: { type: String, required: true },
   section: { type: String, default: "" },
@@ -69,11 +110,13 @@ const classSectionSchema = new Schema<IClassSection>({
 export const ClassSection = mongoose.model<IClassSection>("ClassSection", classSectionSchema);
 
 export interface IClassSubject {
+  departmentId: Types.ObjectId;
   classId: Types.ObjectId;
   subjectId: Types.ObjectId;
   hours: number;
 }
 const classSubjectSchema = new Schema<IClassSubject>({
+  departmentId: departmentRef,
   classId: { type: Schema.Types.ObjectId, ref: "ClassSection", required: true },
   subjectId: { type: Schema.Types.ObjectId, ref: "Subject", required: true },
   hours: { type: Number, required: true },
@@ -82,12 +125,14 @@ classSubjectSchema.index({ classId: 1, subjectId: 1 }, { unique: true });
 export const ClassSubject = mongoose.model<IClassSubject>("ClassSubject", classSubjectSchema);
 
 export interface ITeacherUnavailable {
+  departmentId: Types.ObjectId;
   teacherId: Types.ObjectId;
   day: string;
   /** null = the whole day is blocked. */
   period: number | null;
 }
 const teacherUnavailableSchema = new Schema<ITeacherUnavailable>({
+  departmentId: departmentRef,
   teacherId: { type: Schema.Types.ObjectId, ref: "Teacher", required: true },
   day: { type: String, required: true },
   period: { type: Number, default: null },
@@ -116,6 +161,13 @@ export interface IConfig {
   department: string;
   /** Short department name for the masthead, e.g. "CSE". */
   departmentShort: string;
+  /**
+   * The currently ACTIVE department. All data endpoints operate on
+   * this department only. (Legacy department/departmentShort/session/
+   * effectiveFrom fields above remain as fallbacks for a fresh DB
+   * with no departments yet, and as the backfill source.)
+   */
+  activeDepartmentId: Types.ObjectId | null;
 }
 const configSchema = new Schema<IConfig>({
   // NITA pattern (real CSE master routine, ODD 2026): Mon–Fri, hourly
@@ -130,10 +182,12 @@ const configSchema = new Schema<IConfig>({
   effectiveFrom: { type: String, default: "27/07/2026" },
   department: { type: String, default: "Computer Science and Engineering" },
   departmentShort: { type: String, default: "CSE" },
+  activeDepartmentId: { type: Schema.Types.ObjectId, ref: "Department", default: null },
 });
 export const Config = mongoose.model<IConfig>("Config", configSchema);
 
 export interface IRoutineEntry {
+  departmentId: Types.ObjectId;
   classId: Types.ObjectId;
   subjectId: Types.ObjectId;
   teacherId: Types.ObjectId;
@@ -141,6 +195,7 @@ export interface IRoutineEntry {
   period: number;
 }
 const routineEntrySchema = new Schema<IRoutineEntry>({
+  departmentId: departmentRef,
   classId: { type: Schema.Types.ObjectId, ref: "ClassSection", required: true },
   subjectId: { type: Schema.Types.ObjectId, ref: "Subject", required: true },
   teacherId: { type: Schema.Types.ObjectId, ref: "Teacher", required: true },

@@ -36,11 +36,12 @@ describe("demo dataset solves clean", () => {
     expect(result.success, `unplaced: ${JSON.stringify(result.unplaced)}`).toBe(true);
     const total = classSubjects.reduce((s, c) => s + c.hours, 0);
     expect(result.entries.length).toBe(total);
-    // NITA MCA seed (block model): Sem 1 = 25h + Sem 3 = 24h + Sem 5 = 23h
-    // = 72 hours; each class runs 12 sessions (5 theory subjects split
-    // 2+2 or 2+1, 2 labs as single 3h blocks) = 36 sessions.
-    expect(total).toBe(72);
-    expect(result.totalJobs).toBe(36);
+    // Full NITA CSE department seed (block model): B.Tech 3A/3B = 27h,
+    // 5A/5B = 31h, 7A/7B = 11h; MCA 25h + 24h + 23h; M.Tech CYSEC 18h,
+    // DSE 21h, AI 21h = 270 hours in 141 sessions (theory split 2+2 or
+    // 2+1, labs as single 3h blocks, Seminar 1h).
+    expect(total).toBe(270);
+    expect(result.totalJobs).toBe(141);
   });
 
   it("H1: no teacher teaches two classes in the same slot", () => {

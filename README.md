@@ -24,8 +24,22 @@ w.e.f. date, **classes/sections, teachers** (codes, eligibility,
 limits, off-days), **courses/subjects**, and the **per-class weekly
 hours**. Every department plugs in its own classes, teachers and
 courses, and gets its routine in the same master format. The
-preloaded department is NITA CSE (the real MCA subjects, faculty and
-faculty codes from the ODD 2026 sheet).
+preloaded department is NITA CSE — the **full department**: B.Tech,
+MCA and M.Tech classes with the real subjects, faculty and faculty
+codes from the ODD 2026 sheet.
+
+**Multi-department storage.** Departments **coexist**: every teacher,
+subject, class, mapping, availability block and routine entry is
+stored against its own department, and every screen works on the
+**active** department only (switcher in the sidebar, or the
+Departments card on the Dashboard). Creating a department **never
+deletes or replaces** an existing one; re-loading the CSE demo
+refreshes only CSE's own data. A department is removed only by the
+explicit **Delete** action on the Dashboard (the last remaining
+department cannot be deleted). If the wizard is given a department
+name that already exists, the API answers `409 Department already
+exists` with the existing department's id and the UI offers to switch
+to it — it never overwrites.
 
 ## Setting up a new department — the wizard
 
@@ -54,19 +68,51 @@ the Dashboard and from Setup → "Set up a new department"):
 6. **Review & Create** — the same validation the Validation page uses
    (demand vs eligible-teacher capacity, grid overflow, courses with
    no eligible teacher) in plain words. On confirm, **one call**
-   (`POST /api/setup/department`) replaces the current workspace data
-   with the new department — single active department model, stated
-   plainly in the UI before confirming — and sets the Config
-   department/session/w.e.f. from Step 1. The payload is fully
-   validated *before* anything is wiped, so a bad payload changes
-   nothing. "Generate Routine" then runs the normal solver + master
-   sheet flow, with the new department's name in the masthead.
+   (`POST /api/setup/department`) creates a **new department alongside
+   the existing ones — nothing is deleted or replaced** — and makes it
+   active. The payload is fully validated *before* anything is
+   written, so a bad payload changes nothing. "Generate Routine" then
+   runs the normal solver + master sheet flow, with the new
+   department's name in the masthead.
 
-Verified end-to-end on the production build (in-memory Mongo): a
-sample ECE setup (2 classes, 5 courses incl. 1 lab, 4 teachers)
-validates clean, generates **30/30 hours (14/14 sessions), 0
-unplaced**, and the master API carries the ECE masthead data; the
-NITA CSE seed path is unaffected (72/72 hours, 36/36 sessions).
+Verified end-to-end (integration tests + production build,
+in-memory Mongo): a sample ECE setup (2 classes, 5 courses incl. 1
+lab, 4 teachers) validates clean, generates with **0 unplaced**, and
+the master API carries the ECE masthead data — while the NITA CSE
+department, including its generated 270-entry routine, stays fully
+intact next to it (270/270 hours, 141/141 sessions). Switching back
+and forth loses nothing; re-seeding CSE refreshes CSE only.
+
+## Coverage & balance — hours left, and who is getting less
+
+While teachers are being added, two questions matter: *how many of a
+course's required hours are still uncovered?* and *which teachers are
+getting less work than the others?* A greedy **suggested
+distribution** answers both (`server/src/solver/balance.ts`):
+requirements are processed most-constrained first (fewest eligible
+teachers, then most hours), each requirement's hours go to the
+least-loaded eligible teacher who still has weekly capacity, and a
+requirement splits across teachers when the first one fills up.
+Weekly caps are never exceeded.
+
+- **In the wizard** (Teachers and Mapping steps) a live *Coverage &
+  balance* panel shows, per course, required / covered / **hours
+  left** (red badge until it reaches zero, then "Covered") and, per
+  teacher, the suggested load as `9 / 20 h` with a bar. Teachers below
+  60% of the average suggested load are flagged **Under-loaded — can
+  take more subjects**, so you can tick extra courses for them and
+  watch the distribution even out before creating the department.
+- **On the Validation page**, a *Load balance* section shows the same
+  computation for the saved data: subjects with hours still left to
+  cover appear first as warnings, then a teacher table (suggested
+  hours, weekly max, subjects with hours, status badge).
+- Endpoints: `GET /api/balance` (saved data) and
+  `POST /api/balance/preview` (wizard state, code-based payload,
+  read-only — bad payloads get a 400 with a problems list).
+
+The suggestion is a planning aid, not the timetable: it ignores days,
+periods and availability — the solver still makes the real placement
+under all the hard rules.
 
 ## Why MERN?
 
@@ -119,13 +165,16 @@ npm test             # vitest: 15 tests
 
 ## Demo walkthrough (5 steps)
 
-1. Open the app → **Load NITA MCA Data** (the real NITA CSE dataset:
-   22 faculty with their sheet codes — DJB, PB, MKDB, TP, … — 21 subjects
-   from the real legend, MCA Sem 1 / 3 / 5, Mon–Fri, hourly grid from
-   9:00, lunch 1:00–2:00 after P4; theory subjects run 2h sessions,
-   labs single 3h blocks). Sem 5 assignments are
-   the ones printed on the real sheet: AI / AI Lab = DJB,
-   CD / CD Lab = PB, E-COMM + WCN = MKDB, DIP = TP.
+1. Open the app → **Load NIT Agartala CSE Data** (the real NITA CSE
+   department dataset: 32 faculty with their sheet codes — DJB, PB,
+   MKDB, TP, … — 54 subjects from the real legends, 12 classes:
+   B.Tech Sem 3 / 5 / 7 (A + B), MCA Sem 1 / 3 / 5, M.Tech Sem 1
+   CYSEC / DSE / AI; Mon–Fri, hourly grid from 9:00, lunch 1:00–2:00
+   after P4; theory subjects run 2h sessions, labs single 3h blocks).
+   Assignments follow the ones printed on the real sheet wherever it
+   names a teacher: MCA Sem 5 AI / AI Lab = DJB, CD / CD Lab = PB,
+   E-COMM + WCN = MKDB, DIP = TP; B.Tech DBMS = SN, OS = SDB,
+   ML 7A = KC / 7B = AJ, M.Tech CRYPTO = NK, …
 2. Open **Validation** — demand vs eligible-teacher capacity per subject.
 3. Click **Generate Routine**.
 4. View the **Master sheet** (NITA format, below) / By Class / By
@@ -138,9 +187,9 @@ npm test             # vitest: 15 tests
    break."*).
 
 **Measured on the NITA demo data** (actual runs of this codebase):
-solver places **72/72 hours (36/36 sessions), 0 unplaced**, search
-**36 nodes**, **0.01 s** via the HTTP generate call. All **15/15 tests
-pass**.
+the full CSE department solves to **270/270 hours (141/141
+sessions), 0 unplaced**, search **141 nodes** (no backtracking
+needed), **≈0.02 s**. All **15/15 tests pass**.
 
 ## Session model (the real sheet's blocks, not single periods)
 
@@ -158,9 +207,13 @@ plus **one shorter remainder session** when they don't divide evenly
 (theory 4h @2 → 2+2; theory 3h @2 → 2+1; lab 3h @3 → one block).
 A session must sit entirely inside the morning segment (P1–P4) or the
 afternoon segment (P5–P7) — **no session ever crosses lunch**, so a
-3h block can only start at P1, P2 or P5. In the demo seed each class
-runs 12 sessions/week: five theory subjects (2+2 or 2+1) and two labs
-as single 3h blocks — Sem 1 = 25h, Sem 3 = 24h, Sem 5 = 23h.
+3h block can only start at P1, P2 or P5. In the demo seed the MCA
+classes each run 12 sessions/week (five theory subjects at 2+2 or
+2+1, two labs as single 3h blocks — Sem 1 = 25h, Sem 3 = 24h,
+Sem 5 = 23h); the B.Tech and M.Tech classes follow the same pattern
+at their own loads (B.Tech Sem 3 = 27h, Sem 5 = 31h, Sem 7 = 11h —
+the real 7th-sem sheet carries only ML + electives, the rest is
+project work; M.Tech = 18–21h).
 
 ## The master sheet (NITA format)
 
@@ -168,11 +221,11 @@ The Master Routine page reproduces the department's real sheet:
 
 - **Masthead** — "NATIONAL INSTITUTE OF TECHNOLOGY AGARTALA"
   (institute: fixed, always) / "**CSE** DEPARTMENT CLASS ROUTINE
-  (NITA)" — only the department line varies, from the Config
-  `department` / `departmentShort` fields (another department reads
-  e.g. "ECE DEPARTMENT CLASS ROUTINE (NITA)") — + session line
-  (`ODD 2026, w.e.f. 27/07/2026`; session and w.e.f. date are Config
-  fields, editable in Setup).
+  (NITA)" — only the department line varies, taken from the **active
+  Department** document (another department reads e.g. "ECE
+  DEPARTMENT CLASS ROUTINE (NITA)") — + session line
+  (`ODD 2026, w.e.f. 27/07/2026`; the active department's session and
+  w.e.f. date, editable in Setup).
 - **One table per day** — rows = classes/sections, columns = periods
   headed by **clock times** computed from Config's day start +
   period duration (lunch occupies one period-length slot in the
@@ -229,7 +282,7 @@ session block**, and the full span is clash-checked before applying.
 ## API (all under `/api`, JSON, Zod-validated)
 
 - `GET /dashboard` — counts, issues, warnings
-- `POST /seed` — load the MCA demo dataset
+- `POST /seed` — load the built-in NITA CSE department dataset
 - `POST /setup/department` — the New Department wizard's single commit
   endpoint: full department payload (identity + classes + courses +
   teachers + hours mapping, cross-referenced by course code),
@@ -247,6 +300,12 @@ session block**, and the full span is clash-checked before applying.
   `POST /routine/generate`, `POST /routine/move`, `POST /routine/swap`,
   `POST /routine/clear`
 - `GET /validation` — demand vs capacity report
+- `GET /balance` — coverage & balance for the saved data: per subject
+  required / assigned / remaining hours, per teacher the suggested
+  load vs weekly max with an under / full / balanced status
+- `POST /balance/preview` — the same greedy distribution for
+  not-yet-saved wizard state (teachers + courses + hours mapping by
+  course code); read-only, 400 with a problems list on bad payloads
 
 ## Deployment (Render, one service, one URL)
 

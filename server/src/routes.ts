@@ -1,9 +1,10 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { Types } from "mongoose";
 import { z } from "zod";
 import {
   ClassSection,
   ClassSubject,
-  Config,
+  Department,
   RoutineEntry,
   Subject,
   Teacher,
@@ -11,7 +12,18 @@ import {
   getOrCreateConfig,
 } from "./models.js";
 import {
+  deleteDepartmentData,
+  departmentCounts,
+  findDepartmentByName,
+  getActiveDepartment,
+  listDepartments,
+  scope,
+  setActiveDepartment,
+} from "./departments.js";
+import { mergedScheduleConfig } from "./data.js";
+import {
   availabilitySchema,
+  balancePreviewSchema,
   classSchema,
   classSubjectSchema,
   configSchema,
@@ -21,6 +33,11 @@ import {
   swapSchema,
   teacherSchema,
 } from "./schemas.js";
+import {
+  computeBalance,
+  BalanceInput,
+  BalanceReport,
+} from "./solver/balance.js";
 import { loadSolverData, validateData, SolverDataset } from "./data.js";
 import {
   SubjectData,
@@ -49,15 +66,110 @@ const wrap =
   (req: Request, res: Response, next: NextFunction) =>
     fn(req, res).catch(next);
 
+/** Id of the ACTIVE department, or null on a fresh (empty) workspace. */
+async function activeDeptId(): Promise<string | null> {
+  const dept = await getActiveDepartment();
+  return dept ? dept._id.toString() : null;
+}
+
+/**
+ * Active department id for WRITE endpoints: when there is no
+ * department yet there is nothing to write into — 400 with the reason.
+ */
+async function requireActiveDept(res: Response): Promise<string | null> {
+  const id = await activeDeptId();
+  if (!id) {
+    res.status(400).json({
+      error: "No active department yet — load the CSE department or create one with the setup wizard first.",
+    });
+    return null;
+  }
+  return id;
+}
+
+/** Read-side filter: the active department's scope (matches nothing when empty). */
+async function readFilter() {
+  const id = await activeDeptId();
+  return id ? scope(id) : { departmentId: { $exists: false } };
+}
+
+// -------------------------------------------------------------- departments
+router.get(
+  "/departments",
+  wrap(async (_req, res) => {
+    const [depts, activeId] = await Promise.all([listDepartments(), activeDeptId()]);
+    const out = [];
+    for (const d of depts) {
+      const counts = await departmentCounts(d._id.toString());
+      out.push({
+        id: d._id.toString(),
+        name: d.name,
+        shortName: d.shortName,
+        session: d.session,
+        effectiveFrom: d.effectiveFrom,
+        createdAt: d.createdAt,
+        counts,
+        isActive: d._id.toString() === activeId,
+      });
+    }
+    res.json({ departments: out, activeDepartmentId: activeId });
+  }),
+);
+
+router.post(
+  "/departments/:id/activate",
+  wrap(async (req, res) => {
+    const dept = await Department.findById(req.params.id);
+    if (!dept) return void res.status(404).json({ error: "Department not found." });
+    await setActiveDepartment(dept._id);
+    const counts = await departmentCounts(dept._id.toString());
+    res.json({
+      message: `${dept.shortName} (${dept.name}) is now the active department.`,
+      department: { id: dept._id.toString(), name: dept.name, shortName: dept.shortName },
+      counts,
+    });
+  }),
+);
+
+router.delete(
+  "/departments/:id",
+  wrap(async (req, res) => {
+    const dept = await Department.findById(req.params.id);
+    if (!dept) return void res.status(404).json({ error: "Department not found." });
+    const total = await Department.countDocuments();
+    if (total <= 1) {
+      return void res.status(400).json({
+        error: "Cannot delete the last remaining department — create another department first if you want to replace it.",
+      });
+    }
+    const wasActive = (await activeDeptId()) === dept._id.toString();
+    await deleteDepartmentData(dept._id.toString());
+    let newActive: string | null = null;
+    if (wasActive) {
+      const next = await Department.findOne().sort({ createdAt: 1 });
+      if (next) {
+        await setActiveDepartment(next._id);
+        newActive = next._id.toString();
+      }
+    }
+    res.json({
+      message: `Department ${dept.shortName} (${dept.name}) and its data were deleted. Other departments were not touched.`,
+      deletedDepartmentId: dept._id.toString(),
+      activeDepartmentId: newActive ?? (await activeDeptId()),
+    });
+  }),
+);
+
 // ---------------------------------------------------------------- dashboard
 router.get(
   "/dashboard",
   wrap(async (_req, res) => {
+    const filter = await readFilter();
     const [teachers, subjects, classes, entries] = await Promise.all([
-      Teacher.countDocuments(),
-      Subject.countDocuments(),
-      ClassSection.countDocuments(),
-      RoutineEntry.countDocuments(),
+      Teacher.countDocuments(filter),
+      Subject.countDocuments(filter),
+      ClassSection.countDocuments(filter),
+      RoutineEntry.countDocuments(filter),
     ]);
     const data = await loadSolverData();
     const { issues, warnings } = validateData(data);
@@ -76,7 +188,9 @@ router.post(
   wrap(async (_req, res) => {
     const counts = await loadDemoData();
     res.json({
-      message: `NITA CSE MCA data loaded: ${counts.teachers} teachers, ${counts.subjects} subjects, ${counts.classes} classes. Now click Generate Routine.`,
+      message:
+        `NIT Agartala CSE department ${counts.created ? "created" : "reloaded (only CSE data was refreshed — other departments untouched)"}: ` +
+        `${counts.teachers} teachers, ${counts.subjects} subjects, ${counts.classes} classes. Now click Generate Routine.`,
       counts,
     });
   }),
@@ -88,11 +202,15 @@ router.post(
  *
  * The whole payload is validated FIRST (Zod shape, then cross-reference
  * and duplicate checks, then the same pre-flight validation the
- * Validation page uses). Only when everything checks out is the
- * current workspace wiped and replaced — a bad payload changes nothing.
- * The institute (NIT Agartala) and the time grid are product constants:
- * the grid fields of Config are left untouched; only the department
- * identity + session header come from the wizard.
+ * Validation page uses). A bad payload changes nothing.
+ *
+ * MULTI-DEPARTMENT: nothing is ever wiped. On success a NEW Department
+ * is created with its own scoped data and made active; every existing
+ * department keeps its data untouched. If a department with the same
+ * name already exists, the route answers 409 with its id so the UI
+ * can offer switching to it instead.
+ * The institute (NIT Agartala) and the time grid are product constants
+ * and are not part of this payload.
  */
 router.post(
   "/setup/department",
@@ -224,30 +342,33 @@ router.post(
     };
     const report = validateData(synthDataset);
 
-    // -- wipe + replace (single active department model) --------------
-    await Promise.all([
-      RoutineEntry.deleteMany({}),
-      TeacherUnavailable.deleteMany({}),
-      ClassSubject.deleteMany({}),
-      Teacher.deleteMany({}),
-      Subject.deleteMany({}),
-      ClassSection.deleteMany({}),
-    ]);
+    // -- duplicate department name? Never overwrite: 409 + switch hint -
+    const existingDept = await findDepartmentByName(body.department.name);
+    if (existingDept) {
+      return void res.status(409).json({
+        error: "Department already exists",
+        departmentId: existingDept._id.toString(),
+        department: {
+          id: existingDept._id.toString(),
+          name: existingDept.name,
+          shortName: existingDept.shortName,
+        },
+      });
+    }
 
-    await Config.findOneAndUpdate(
-      {},
-      {
-        department: body.department.name,
-        departmentShort: body.department.short,
-        session: body.department.session,
-        effectiveFrom: body.department.effectiveFrom,
-      },
-      { upsert: true },
-    );
+    // -- create the NEW department + its scoped data (nothing wiped) ---
+    const dept = await Department.create({
+      name: body.department.name,
+      shortName: body.department.short,
+      session: body.department.session,
+      effectiveFrom: body.department.effectiveFrom,
+    });
+    const deptFilter = scope(dept._id.toString());
 
     const subjectIdByCode = new Map<string, string>();
     for (const s of body.subjects) {
       const doc = await Subject.create({
+        ...deptFilter,
         name: s.name,
         code: s.code,
         type: s.type,
@@ -259,6 +380,7 @@ router.post(
     const classIds: string[] = [];
     for (const c of body.classes) {
       const doc = await ClassSection.create({
+        ...deptFilter,
         program: c.program,
         year: c.year,
         section: c.section,
@@ -268,6 +390,7 @@ router.post(
 
     for (const t of body.teachers) {
       const doc = await Teacher.create({
+        ...deptFilter,
         name: t.name,
         code: t.code,
         designation: t.designation,
@@ -277,6 +400,7 @@ router.post(
       });
       if (t.unavailableDay) {
         await TeacherUnavailable.create({
+          ...deptFilter,
           teacherId: doc._id,
           day: t.unavailableDay,
           period: null,
@@ -288,6 +412,7 @@ router.post(
     for (const m of body.classSubjects) {
       if (m.hours <= 0) continue;
       await ClassSubject.create({
+        ...deptFilter,
         classId: classIds[m.classIndex],
         subjectId: subjectIdByCode.get(m.subjectCode.toUpperCase()),
         hours: m.hours,
@@ -295,11 +420,14 @@ router.post(
       mappings++;
     }
 
+    await setActiveDepartment(dept._id);
+
     res.status(201).json({
       message:
-        `${body.department.short} department set up: ${body.classes.length} classes, ` +
+        `${body.department.short} department created alongside your existing departments (nothing was deleted): ${body.classes.length} classes, ` +
         `${body.subjects.length} courses, ${body.teachers.length} teachers, ${mappings} class-course mappings. ` +
-        `Now click Generate Routine.`,
+        `It is now the active department — click Generate Routine.`,
+      departmentId: dept._id.toString(),
       counts: {
         teachers: body.teachers.length,
         subjects: body.subjects.length,
@@ -329,7 +457,7 @@ router.post(
 router.get(
   "/teachers",
   wrap(async (_req, res) => {
-    const teachers = await Teacher.find().sort({ name: 1 }).lean();
+    const teachers = await Teacher.find(await readFilter()).sort({ name: 1 }).lean();
     res.json(
       teachers.map((t) => ({ ...t, id: t._id.toString(), subjects: t.subjects.map(String) })),
     );
@@ -341,7 +469,9 @@ router.post(
   wrap(async (req, res) => {
     const body = parse(teacherSchema, req.body, res);
     if (!body) return;
-    const doc = await Teacher.create(body);
+    const deptId = await requireActiveDept(res);
+    if (!deptId) return;
+    const doc = await Teacher.create({ ...body, departmentId: new Types.ObjectId(deptId) });
     res.status(201).json({ id: doc._id.toString(), message: "Teacher saved." });
   }),
 );
@@ -351,7 +481,10 @@ router.put(
   wrap(async (req, res) => {
     const body = parse(teacherSchema, req.body, res);
     if (!body) return;
-    const doc = await Teacher.findByIdAndUpdate(req.params.id, body, { new: true });
+    const deptId = await activeDeptId();
+    const doc = deptId
+      ? await Teacher.findOneAndUpdate({ _id: req.params.id, ...scope(deptId) }, body, { new: true })
+      : null;
     if (!doc) return void res.status(404).json({ error: "Teacher not found." });
     res.json({ id: doc._id.toString(), message: "Teacher saved." });
   }),
@@ -360,7 +493,9 @@ router.put(
 router.delete(
   "/teachers/:id",
   wrap(async (req, res) => {
-    await Teacher.findByIdAndDelete(req.params.id);
+    const deptId = await activeDeptId();
+    if (deptId) await Teacher.findOneAndDelete({ _id: req.params.id, ...scope(deptId) });
+    else await Teacher.findByIdAndDelete(req.params.id);
     await TeacherUnavailable.deleteMany({ teacherId: req.params.id });
     await RoutineEntry.deleteMany({ teacherId: req.params.id });
     res.json({ message: "Teacher deleted." });
@@ -370,7 +505,10 @@ router.delete(
 router.get(
   "/teachers/:id/availability",
   wrap(async (req, res) => {
-    const teacher = await Teacher.findById(req.params.id).lean();
+    const deptId = await activeDeptId();
+    const teacher = deptId
+      ? await Teacher.findOne({ _id: req.params.id, ...scope(deptId) }).lean()
+      : null;
     if (!teacher) return void res.status(404).json({ error: "Teacher not found." });
     const rows = await TeacherUnavailable.find({ teacherId: req.params.id }).lean();
     res.json({
@@ -385,12 +523,16 @@ router.put(
   wrap(async (req, res) => {
     const body = parse(availabilitySchema, req.body, res);
     if (!body) return;
-    const teacher = await Teacher.findById(req.params.id);
+    const deptId = await activeDeptId();
+    const teacher = deptId
+      ? await Teacher.findOne({ _id: req.params.id, ...scope(deptId) })
+      : null;
     if (!teacher) return void res.status(404).json({ error: "Teacher not found." });
     await TeacherUnavailable.deleteMany({ teacherId: req.params.id });
     const docs = (body.blocked ?? []).map((key) => {
       const [day, period] = key.split("|");
       return {
+        departmentId: teacher.departmentId,
         teacherId: req.params.id,
         day,
         period: period === "null" || period === "*" ? null : Number(period),
@@ -405,7 +547,7 @@ router.put(
 router.get(
   "/subjects",
   wrap(async (_req, res) => {
-    const subjects = await Subject.find().sort({ code: 1 }).lean();
+    const subjects = await Subject.find(await readFilter()).sort({ code: 1 }).lean();
     res.json(subjects.map((s) => ({ ...s, id: s._id.toString() })));
   }),
 );
@@ -423,7 +565,12 @@ router.post(
   wrap(async (req, res) => {
     const body = parse(subjectSchema, req.body, res);
     if (!body) return;
-    const doc = await Subject.create(subjectBody(body));
+    const deptId = await requireActiveDept(res);
+    if (!deptId) return;
+    const doc = await Subject.create({
+      ...subjectBody(body),
+      departmentId: new Types.ObjectId(deptId),
+    });
     res.status(201).json({ id: doc._id.toString(), message: "Subject saved." });
   }),
 );
@@ -433,7 +580,10 @@ router.put(
   wrap(async (req, res) => {
     const body = parse(subjectSchema, req.body, res);
     if (!body) return;
-    const doc = await Subject.findByIdAndUpdate(req.params.id, subjectBody(body), { new: true });
+    const deptId = await activeDeptId();
+    const doc = deptId
+      ? await Subject.findOneAndUpdate({ _id: req.params.id, ...scope(deptId) }, subjectBody(body), { new: true })
+      : null;
     if (!doc) return void res.status(404).json({ error: "Subject not found." });
     res.json({ id: doc._id.toString(), message: "Subject saved." });
   }),
@@ -442,10 +592,12 @@ router.put(
 router.delete(
   "/subjects/:id",
   wrap(async (req, res) => {
-    await Subject.findByIdAndDelete(req.params.id);
+    const deptId = await activeDeptId();
+    if (deptId) await Subject.findOneAndDelete({ _id: req.params.id, ...scope(deptId) });
+    else await Subject.findByIdAndDelete(req.params.id);
     await ClassSubject.deleteMany({ subjectId: req.params.id });
     await RoutineEntry.deleteMany({ subjectId: req.params.id });
-    await Teacher.updateMany({}, { $pull: { subjects: req.params.id } });
+    await Teacher.updateMany(deptId ? scope(deptId) : {}, { $pull: { subjects: req.params.id } });
     res.json({ message: "Subject deleted." });
   }),
 );
@@ -454,10 +606,11 @@ router.delete(
 router.get(
   "/classes",
   wrap(async (_req, res) => {
+    const filter = await readFilter();
     const [classes, requirements, subjects] = await Promise.all([
-      ClassSection.find().sort({ program: 1, year: 1 }).lean(),
-      ClassSubject.find().lean(),
-      Subject.find().lean(),
+      ClassSection.find(filter).sort({ program: 1, year: 1 }).lean(),
+      ClassSubject.find(filter).lean(),
+      Subject.find(filter).lean(),
     ]);
     const subjectById = new Map(subjects.map((s) => [s._id.toString(), s]));
     res.json(
@@ -495,7 +648,9 @@ router.post(
   wrap(async (req, res) => {
     const body = parse(classSchema, req.body, res);
     if (!body) return;
-    const doc = await ClassSection.create(body);
+    const deptId = await requireActiveDept(res);
+    if (!deptId) return;
+    const doc = await ClassSection.create({ ...body, departmentId: new Types.ObjectId(deptId) });
     res.status(201).json({ id: doc._id.toString(), message: "Class saved." });
   }),
 );
@@ -505,7 +660,10 @@ router.put(
   wrap(async (req, res) => {
     const body = parse(classSchema, req.body, res);
     if (!body) return;
-    const doc = await ClassSection.findByIdAndUpdate(req.params.id, body, { new: true });
+    const deptId = await activeDeptId();
+    const doc = deptId
+      ? await ClassSection.findOneAndUpdate({ _id: req.params.id, ...scope(deptId) }, body, { new: true })
+      : null;
     if (!doc) return void res.status(404).json({ error: "Class not found." });
     res.json({ id: doc._id.toString(), message: "Class saved." });
   }),
@@ -514,7 +672,9 @@ router.put(
 router.delete(
   "/classes/:id",
   wrap(async (req, res) => {
-    await ClassSection.findByIdAndDelete(req.params.id);
+    const deptId = await activeDeptId();
+    if (deptId) await ClassSection.findOneAndDelete({ _id: req.params.id, ...scope(deptId) });
+    else await ClassSection.findByIdAndDelete(req.params.id);
     await ClassSubject.deleteMany({ classId: req.params.id });
     await RoutineEntry.deleteMany({ classId: req.params.id });
     res.json({ message: "Class deleted." });
@@ -526,9 +686,18 @@ router.post(
   wrap(async (req, res) => {
     const body = parse(classSubjectSchema, req.body, res);
     if (!body) return;
+    const deptId = await requireActiveDept(res);
+    if (!deptId) return;
+    const [cls, subj] = await Promise.all([
+      ClassSection.findOne({ _id: req.params.id, ...scope(deptId) }),
+      Subject.findOne({ _id: body.subjectId, ...scope(deptId) }),
+    ]);
+    if (!cls || !subj) {
+      return void res.status(404).json({ error: "Class or subject not found in the active department." });
+    }
     await ClassSubject.findOneAndUpdate(
       { classId: req.params.id, subjectId: body.subjectId },
-      { hours: body.hours },
+      { hours: body.hours, departmentId: new Types.ObjectId(deptId) },
       { upsert: true },
     );
     res.json({ message: "Class subject hours saved." });
@@ -547,12 +716,15 @@ router.delete(
 router.get(
   "/config",
   wrap(async (_req, res) => {
-    const cfg = await getOrCreateConfig();
+    // Grid from Config; department identity merged from the ACTIVE
+    // department so the masthead/sidebar always show it.
+    const cfg = await mergedScheduleConfig();
+    const raw = await getOrCreateConfig();
     res.json({
       days: cfg.days,
       periodsPerDay: cfg.periodsPerDay,
       lunchAfter: cfg.lunchAfter,
-      periodDuration: cfg.periodDuration,
+      periodDuration: raw.periodDuration,
       startTime: cfg.startTime,
       session: cfg.session,
       effectiveFrom: cfg.effectiveFrom,
@@ -573,23 +745,31 @@ router.put(
     cfg.lunchAfter = !body.lunchAfter ? null : body.lunchAfter;
     cfg.periodDuration = body.periodDuration ?? cfg.periodDuration;
     cfg.startTime = body.startTime ?? cfg.startTime;
-    cfg.session = body.session ?? cfg.session;
-    cfg.effectiveFrom = body.effectiveFrom ?? cfg.effectiveFrom;
-    cfg.department = body.department ?? cfg.department;
-    cfg.departmentShort = body.departmentShort ?? cfg.departmentShort;
     await cfg.save();
-    await RoutineEntry.deleteMany({}); // grid changed -> routine invalid
-    res.json({ message: "Time structure saved. Existing routine was cleared (grid changed)." });
+    // Department identity edits belong to the ACTIVE department doc.
+    const dept = await getActiveDepartment();
+    if (dept) {
+      if (body.department !== undefined) dept.name = body.department;
+      if (body.departmentShort !== undefined) dept.shortName = body.departmentShort;
+      if (body.session !== undefined) dept.session = body.session;
+      if (body.effectiveFrom !== undefined) dept.effectiveFrom = body.effectiveFrom;
+      await dept.save();
+    }
+    // Grid changed -> only the ACTIVE department's routine is invalid.
+    const deptId = await activeDeptId();
+    if (deptId) await RoutineEntry.deleteMany(scope(deptId));
+    res.json({ message: "Time structure saved. The active department's routine was cleared (grid changed)." });
   }),
 );
 
 // ------------------------------------------------------------------ routine
 async function populatedEntries() {
+  const filter = await readFilter();
   const [entries, subjects, teachers, classes] = await Promise.all([
-    RoutineEntry.find().lean(),
-    Subject.find().lean(),
-    Teacher.find().lean(),
-    ClassSection.find().lean(),
+    RoutineEntry.find(filter).lean(),
+    Subject.find(filter).lean(),
+    Teacher.find(filter).lean(),
+    ClassSection.find(filter).lean(),
   ]);
   const sById = new Map(subjects.map((s) => [s._id.toString(), s]));
   const tById = new Map(teachers.map((t) => [t._id.toString(), t]));
@@ -628,7 +808,10 @@ router.get(
   "/routine/class/:id",
   wrap(async (req, res) => {
     const all = await populatedEntries();
-    const cls = await ClassSection.findById(req.params.id).lean();
+    const deptId = await activeDeptId();
+    const cls = deptId
+      ? await ClassSection.findOne({ _id: req.params.id, ...scope(deptId) }).lean()
+      : null;
     if (!cls) return void res.status(404).json({ error: "Class not found." });
     const data = await loadSolverData();
     res.json({
@@ -646,7 +829,10 @@ router.get(
   "/routine/teacher/:id",
   wrap(async (req, res) => {
     const all = await populatedEntries();
-    const teacher = await Teacher.findById(req.params.id).lean();
+    const deptId = await activeDeptId();
+    const teacher = deptId
+      ? await Teacher.findOne({ _id: req.params.id, ...scope(deptId) }).lean()
+      : null;
     if (!teacher) return void res.status(404).json({ error: "Teacher not found." });
     const data = await loadSolverData();
     const mine = all.filter((e) => e.teacherId === req.params.id);
@@ -665,12 +851,15 @@ router.get(
 router.post(
   "/routine/generate",
   wrap(async (_req, res) => {
+    const deptId = await requireActiveDept(res);
+    if (!deptId) return;
     const data = await loadSolverData();
     const result = solve(data.teachers, data.subjects, data.classSubjects, data.config, 10);
-    await RoutineEntry.deleteMany({});
+    await RoutineEntry.deleteMany(scope(deptId));
     if (result.entries.length) {
       await RoutineEntry.insertMany(
         result.entries.map((e) => ({
+          departmentId: new Types.ObjectId(deptId),
           classId: e.classId,
           subjectId: e.subjectId,
           teacherId: e.teacherId,
@@ -704,13 +893,14 @@ router.post(
 router.post(
   "/routine/clear",
   wrap(async (_req, res) => {
-    await RoutineEntry.deleteMany({});
+    const filter = await readFilter();
+    await RoutineEntry.deleteMany(filter);
     res.json({ message: "Routine cleared." });
   }),
 );
 
 async function entriesAsLikes(): Promise<EntryLike[]> {
-  const docs = await RoutineEntry.find().lean();
+  const docs = await RoutineEntry.find(await readFilter()).lean();
   return docs.map((e) => ({
     id: e._id.toString(),
     classId: e.classId.toString(),
@@ -809,13 +999,142 @@ router.post(
   }),
 );
 
+// ------------------------------------------------------------ load balance
+/**
+ * Coverage & balance — the greedy suggested distribution of required
+ * hours across eligible teachers (see solver/balance.ts). Answers,
+ * while data is being entered: "which subjects still have hours LEFT
+ * to cover?" and "which teachers are getting too little work?".
+ */
+
+/** Build the balance input from the saved workspace (DB) data. */
+async function balanceFromDb(): Promise<BalanceReport> {
+  const filter = await readFilter();
+  const [teacherDocs, subjectDocs, classDocs, csDocs] = await Promise.all([
+    Teacher.find(filter).sort({ name: 1 }).lean(),
+    Subject.find(filter).sort({ code: 1 }).lean(),
+    ClassSection.find(filter).lean(),
+    ClassSubject.find(filter).lean(),
+  ]);
+  const codeBySubjectId = new Map(subjectDocs.map((s) => [s._id.toString(), s.code]));
+  const labelByClassId = new Map(
+    classDocs.map((c) => [c._id.toString(), classLabel(c.program, c.year, c.section)]),
+  );
+  const input: BalanceInput = {
+    teachers: teacherDocs.map((t) => ({
+      code: t.code ?? "",
+      name: t.name,
+      weeklyMaxHours: t.weeklyHours,
+      eligibleSubjectCodes: t.subjects
+        .map((sid) => codeBySubjectId.get(sid.toString()))
+        .filter((c): c is string => Boolean(c)),
+    })),
+    subjects: subjectDocs.map((s) => ({ code: s.code })),
+    requirements: csDocs
+      .filter((cs) => cs.hours > 0)
+      .map((cs) => ({
+        classLabel: labelByClassId.get(cs.classId.toString()) ?? "?",
+        subjectCode: codeBySubjectId.get(cs.subjectId.toString()) ?? "?",
+        hours: cs.hours,
+      })),
+  };
+  return computeBalance(input);
+}
+
+router.get(
+  "/balance",
+  wrap(async (_req, res) => {
+    res.json(await balanceFromDb());
+  }),
+);
+
+/**
+ * POST /api/balance/preview — same computation for not-yet-saved
+ * wizard state. Read-only: a bad payload is a 400 with a problems
+ * list and nothing is written, ever.
+ */
+router.post(
+  "/balance/preview",
+  wrap(async (req, res) => {
+    const raw = parse(balancePreviewSchema, req.body, res);
+    if (!raw) return;
+
+    // Normalise Zod defaults into concrete locals.
+    const body = {
+      classes: (raw.classes ?? []).map((c) => ({ ...c, section: c.section ?? "" })),
+      subjects: raw.subjects.map((s) => ({ ...s, name: s.name ?? "" })),
+      teachers: raw.teachers.map((t) => ({
+        ...t,
+        name: t.name ?? "",
+        code: t.code ?? "",
+        subjects: t.subjects ?? [],
+      })),
+      classSubjects: raw.classSubjects ?? [],
+    };
+
+    const problems: string[] = [];
+    const subjectCodes = new Map<string, string>(); // upper-cased -> display code
+    for (const s of body.subjects) {
+      const k = s.code.toUpperCase();
+      if (subjectCodes.has(k)) problems.push(`Duplicate course code "${s.code}".`);
+      else subjectCodes.set(k, s.code);
+    }
+    body.teachers.forEach((t, i) => {
+      for (const code of t.subjects) {
+        if (!subjectCodes.has(code.toUpperCase()))
+          problems.push(
+            `Teacher ${t.name || `#${i + 1}`} can teach "${code}", which is not one of the courses.`,
+          );
+      }
+    });
+    for (const m of body.classSubjects) {
+      if (!subjectCodes.has(m.subjectCode.toUpperCase()))
+        problems.push(`Mapping refers to course "${m.subjectCode}", which does not exist.`);
+      if (body.classes.length > 0 && m.classIndex >= body.classes.length)
+        problems.push(`Mapping refers to class #${m.classIndex + 1}, which does not exist.`);
+    }
+    if (problems.length) {
+      return void res.status(400).json({ error: "Balance preview has problems", problems });
+    }
+
+    const input: BalanceInput = {
+      teachers: body.teachers.map((t, i) => ({
+        code: t.code || "",
+        name: t.name || `Teacher ${i + 1}`,
+        weeklyMaxHours: t.weeklyHours,
+        eligibleSubjectCodes: t.subjects,
+      })),
+      subjects: body.subjects.map((s) => ({ code: s.code })),
+      requirements: body.classSubjects
+        .filter((m) => m.hours > 0)
+        .map((m) => ({
+          classLabel:
+            body.classes[m.classIndex] !== undefined
+              ? classLabel(
+                  body.classes[m.classIndex].program,
+                  body.classes[m.classIndex].year,
+                  body.classes[m.classIndex].section,
+                )
+              : `Class ${m.classIndex + 1}`,
+          subjectCode: m.subjectCode,
+          hours: m.hours,
+        })),
+    };
+    res.json(computeBalance(input));
+  }),
+);
+
 // --------------------------------------------------------------- validation
 router.get(
   "/validation",
   wrap(async (_req, res) => {
     const data = await loadSolverData();
     const report = validateData(data);
+    const deptId = await activeDeptId();
     const placedDocs = await RoutineEntry.aggregate([
+      ...(deptId
+        ? [{ $match: { departmentId: new Types.ObjectId(deptId) } }]
+        : [{ $match: { departmentId: { $exists: false } } }]),
       { $group: { _id: "$subjectId", n: { $sum: 1 } } },
     ]);
     const placed: Record<string, number> = {};

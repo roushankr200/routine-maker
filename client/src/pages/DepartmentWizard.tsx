@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -8,13 +8,22 @@ import {
   CheckCircle2,
   Play,
   Plus,
+  RefreshCw,
+  Scale,
   Trash2,
   Wand2,
 } from "lucide-react";
-import { errorMessage, generateRoutine, setupDepartment } from "../api";
+import {
+  activateDepartment,
+  errorMessage,
+  generateRoutine,
+  previewBalance,
+  setupDepartment,
+} from "../api";
+import BalancePanel from "../components/BalancePanel";
 import { Banner, PageTitle } from "../components/ui";
 import { initialsCode } from "../utils/time";
-import type { DepartmentSetupResult, WizardPayload } from "../types";
+import type { BalancePreviewPayload, DepartmentSetupResult, WizardPayload } from "../types";
 
 /**
  * New Department setup wizard — question-first onboarding for any
@@ -24,8 +33,9 @@ import type { DepartmentSetupResult, WizardPayload } from "../types";
  * of 7 slots, 9:00–5:00, lunch 1–2 after P4) are PRODUCT CONSTANTS and
  * are never asked. The wizard only asks what varies per department:
  * its name, classes, courses, teachers and the weekly-hours mapping.
- * Nothing is written until Step 6 confirms: one POST replaces the
- * current workspace department (single active department model).
+ * Nothing is written until Step 6 confirms: one POST creates a NEW
+ * department ALONGSIDE the existing ones (multi-department storage) —
+ * creating a department never deletes or replaces another one.
  */
 
 const GRID_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
@@ -262,11 +272,113 @@ export default function DepartmentWizard() {
     ),
   });
 
+  // ------------------------------------------ coverage & balance panel
+  // Live preview (POST /api/balance/preview, debounced) shown on the
+  // Teachers and Mapping steps: per course, the required hours still
+  // LEFT to cover; per teacher, the suggested load — under-loaded
+  // teachers are flagged so subjects can be redistributed to balance.
+  const previewPayload: BalancePreviewPayload = {
+    classes: classes.map((c) => ({
+      program: c.program.trim(),
+      year: c.year.trim(),
+      section: c.section.trim(),
+    })),
+    subjects: courses
+      .filter((c) => c.code.trim())
+      .map((c) => ({
+        name: c.name.trim(),
+        code: c.code.trim(),
+        type: c.type,
+        sessionHours: c.sessionHours,
+      })),
+    teachers: teachers.map((t) => ({
+      name: t.name.trim(),
+      code: t.code.trim(),
+      designation: t.designation.trim(),
+      maxPerDay: t.maxPerDay,
+      weeklyHours: t.weeklyHours,
+      subjects: t.subjects.filter((code) => courseCodes.includes(code.toUpperCase())),
+      unavailableDay: t.unavailableDay || null,
+    })),
+    classSubjects: classes.flatMap((_, ci) =>
+      courses
+        .filter((c) => c.code.trim())
+        .map((course) => ({
+          classIndex: ci,
+          subjectCode: course.code.trim(),
+          hours: hourAt(ci, course) || 0,
+        })),
+    ),
+  };
+  const canPreview = previewPayload.subjects.length > 0 && previewPayload.teachers.length > 0;
+  const previewJson = JSON.stringify(previewPayload);
+  const [debouncedPreviewJson, setDebouncedPreviewJson] = useState("");
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedPreviewJson(previewJson), 400);
+    return () => clearTimeout(id);
+  }, [previewJson]);
+  const balanceQuery = useQuery({
+    queryKey: ["balance-preview", debouncedPreviewJson],
+    queryFn: () => previewBalance(JSON.parse(debouncedPreviewJson) as BalancePreviewPayload),
+    enabled: canPreview && debouncedPreviewJson !== "" && (step === 3 || step === 4),
+    retry: false,
+  });
+
+  const balanceCard = (note?: string) => (
+    <div className="card mt-4 px-5 py-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="flex items-center gap-2 font-semibold">
+          <Scale className="h-5 w-5 text-primary" aria-hidden /> Coverage &amp; balance
+        </h2>
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={() => balanceQuery.refetch()}
+          disabled={!canPreview || balanceQuery.isFetching}
+        >
+          <RefreshCw className="h-4 w-4" aria-hidden /> Refresh
+        </button>
+      </div>
+      {!canPreview ? (
+        <p className="text-sm text-muted">
+          Give every course a code in Step 3 and keep at least one teacher here — the hours-left
+          coverage and the suggested load per teacher appear in this panel.
+        </p>
+      ) : balanceQuery.isPending || balanceQuery.isFetching ? (
+        <p className="text-sm text-muted">Computing coverage…</p>
+      ) : balanceQuery.error ? (
+        <p className="text-sm text-red-700">{errorMessage(balanceQuery.error)}</p>
+      ) : balanceQuery.data ? (
+        <BalancePanel report={balanceQuery.data} note={note} />
+      ) : null}
+    </div>
+  );
+
+  const [existsDept, setExistsDept] = useState<{ id: string; name: string; shortName: string } | null>(null);
   const create = useMutation({
     mutationFn: () => setupDepartment(buildPayload()),
     onSuccess: (r) => {
       setResult(r);
       qc.invalidateQueries();
+    },
+    onError: (e) => {
+      // 409: a department with this name already exists — never
+      // overwrite it; offer switching to it instead.
+      const resp = (e as { response?: { status?: number; data?: { departmentId?: string; department?: { id: string; name: string; shortName: string } } } }).response;
+      if (resp?.status === 409 && resp.data?.department) {
+        setExistsDept(resp.data.department);
+        setStepError(null);
+        return;
+      }
+      setStepError(errorMessage(e));
+    },
+  });
+  const switchToExisting = useMutation({
+    mutationFn: (id: string) => activateDepartment(id),
+    onSuccess: () => {
+      qc.clear();
+      navigate("/");
+      window.location.reload();
     },
     onError: (e) => setStepError(errorMessage(e)),
   });
@@ -741,11 +853,36 @@ export default function DepartmentWizard() {
           )}
 
           <Banner
-            kind="warning"
-            text="This replaces the current department data in this workspace — the existing teachers, courses, classes and any generated routine will be removed and replaced by this department. The NITA CSE demo can be reloaded any time from the Dashboard."
+            kind="info"
+            text="This creates a new department alongside your existing ones — nothing is deleted. Your other departments (including the built-in NITA CSE) keep all their teachers, courses, classes and routines, and you can switch between departments any time from the sidebar."
           />
+          {existsDept && (
+            <div className="card border-amber-300 px-5 py-4">
+              <h2 className="mb-1 font-semibold">A department with this name already exists</h2>
+              <p className="mb-3 text-sm text-muted">
+                {existsDept.name} ({existsDept.shortName}) is already saved — it was NOT
+                overwritten. Switch to it to view or edit its data, or go back and give this
+                new department a different name.
+              </p>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={switchToExisting.isPending}
+                onClick={() => switchToExisting.mutate(existsDept.id)}
+              >
+                Switch to {existsDept.shortName}
+              </button>
+            </div>
+          )}
         </div>
       )}
+
+      {/* Coverage & balance — live on the Teachers and Mapping steps */}
+      {step === 3 &&
+        balanceCard(
+          "Required hours come from the Step 5 mapping — prefilled suggestions (theory 4h, lab 3h per class) until you edit them there.",
+        )}
+      {step === 4 && balanceCard()}
 
       {/* ------------------------------------------------ Nav */}
       <div className="mt-5 flex flex-wrap items-center justify-between gap-2">

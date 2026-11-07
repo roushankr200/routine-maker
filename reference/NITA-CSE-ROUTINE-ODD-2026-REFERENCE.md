@@ -92,3 +92,26 @@ Teachers: AI + AI Lab → DJB (Dr. Dhrubajyoti Bhowmik); CD + CD Lab → PB (Dr.
 5. Slots can exist with teacher = XX (unassigned) — generation must tolerate and surface them.
 6. Rooms are typed: theory rooms vs lab rooms (200-series numbers used for both here — type must come from data, not the number).
 7. Teacher identity ≠ teacher code (AS/ABC duplicate) — store a canonical teacher with alias codes.
+
+## 9. Built-in seed coverage (Routine Maker implementation note)
+
+The app's preloaded seed covers the **full CSE department** from this sheet: B.Tech Sem 3/5/7 (A + B), MCA Sem 1/3/5, M.Tech Sem 1 CYSEC/DSE/AI — 12 classes, 54 subjects, 32 faculty (the §5 table plus the further named faculty in the PDF footer). BTMT/MBA cohorts are other departments' and are not seeded. Documented simplifications vs the real sheet: electives are modelled as a **fixed set per section** (B.Tech 5A = FC + DIP, 5B = FC + CG; 7A = IR + CC, 7B = BD + SC) instead of combined parallel elective groups (§2/§8 items 2–4 remain v3); B.Tech 7th sem has **no lab** — the sheet itself lists only ML + electives for 7th sem, so none was invented; rooms, lab-group splits (A1/A2) and `Sch`/`XX` placeholders are not modelled (v3 roadmap).
+
+## 10. Multi-department storage (Routine Maker implementation note)
+
+Departments coexist in one workspace. Each department is a
+`Department` document (name, shortName, session, effectiveFrom); every
+teacher / subject / class / class-subject / unavailability / routine
+entry carries that department's id, and all endpoints operate on the
+**active** department only (the active id is kept on the singleton
+Config; the institute-fixed grid stays in Config, shared — the
+masthead's department line is merged from the active department).
+Creating a department via the wizard **never deletes** an existing
+one; the CSE demo reload (`POST /api/seed`) refreshes only CSE's own
+scoped data. The only removal path is the explicit
+`DELETE /api/departments/:id` (refused for the last remaining
+department). A wizard submission whose department name already exists
+(case-insensitive) is rejected with `409` + the existing id so the UI
+can offer switching instead of overwriting. Routines are generated
+and stored per department — generating ECE's routine cannot disturb
+CSE's.

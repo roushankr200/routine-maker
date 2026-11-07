@@ -73,7 +73,7 @@ export default function Classes() {
         <div className="grid gap-4 sm:grid-cols-3">
           <div>
             <label className="label" htmlFor="c-prog">Program</label>
-            <input id="c-prog" className="input" required placeholder="MCA" value={form.program ?? ""}
+            <input id="c-prog" className="input" required placeholder="B.Tech" value={form.program ?? ""}
               onChange={(e) => setForm({ ...form, program: e.target.value })} />
           </div>
           <div>

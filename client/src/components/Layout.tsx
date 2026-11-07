@@ -1,6 +1,6 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { fetchConfig } from "../api";
+import { activateDepartment, fetchDepartments } from "../api";
 import {
   BookOpen,
   CalendarRange,
@@ -25,10 +25,49 @@ const links = [
 ];
 
 export default function Layout() {
-  // The institute never changes; the department line follows Config —
-  // CSE is the preloaded department, the wizard can replace it (ECE…).
-  const { data: config } = useQuery({ queryKey: ["config"], queryFn: fetchConfig });
-  const deptLine = `${config?.departmentShort ?? "CSE"} Department · NIT Agartala`;
+  // The institute never changes. Departments COEXIST — the switcher
+  // below picks the ACTIVE one; switching never deletes anything.
+  const navigate = useNavigate();
+  const { data: deptData } = useQuery({ queryKey: ["departments"], queryFn: fetchDepartments });
+  const departments = deptData?.departments ?? [];
+  const active = departments.find((d) => d.isActive);
+  const deptLine = active
+    ? `${active.shortName} Department · NIT Agartala`
+    : "NIT Agartala";
+
+  const switcher = (
+    <div className="px-5 py-3">
+      <label className="label" htmlFor="dept-switcher">Active department</label>
+      <select
+        id="dept-switcher"
+        className="input"
+        value={active?.id ?? ""}
+        onChange={async (e) => {
+          const id = e.target.value;
+          if (id === "__new__") {
+            navigate("/setup/wizard");
+            return;
+          }
+          if (!id || id === active?.id) return;
+          await activateDepartment(id);
+          // Simplest correct refresh: reload so every query re-reads
+          // the newly active department's data.
+          window.location.reload();
+        }}
+      >
+        {departments.length === 0 && <option value="">No departments yet</option>}
+        {departments.map((d) => (
+          <option key={d.id} value={d.id}>
+            {d.shortName} — {d.name}
+          </option>
+        ))}
+        <option value="__new__">+ New department…</option>
+      </select>
+      <p className="mt-1 text-xs text-muted">
+        Departments are saved side by side — switching never deletes.
+      </p>
+    </div>
+  );
   return (
     <div className="flex min-h-screen">
       {/* Sidebar — Swiss/minimal: white, strong grid lines, teal active state */}
@@ -39,6 +78,7 @@ export default function Layout() {
           </div>
           <p className="text-xs text-muted">{deptLine}</p>
         </div>
+        <div className="border-b border-line">{switcher}</div>
         <nav aria-label="Main" className="flex flex-col gap-1 p-3">
           {links.map(({ to, label, icon: Icon, end }) => (
             <NavLink
@@ -68,6 +108,7 @@ export default function Layout() {
         <div className="no-print border-b border-line bg-white px-4 py-3 md:hidden">
           <div className="font-mono font-semibold text-primary-dark">Routine Maker</div>
           <p className="text-xs text-muted">{deptLine}</p>
+          {switcher}
           <nav aria-label="Main" className="mt-2 flex flex-wrap gap-1">
             {links.map(({ to, label, end }) => (
               <NavLink

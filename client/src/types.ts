@@ -110,6 +110,7 @@ export interface WizardPayload {
 
 export interface DepartmentSetupResult {
   message: string;
+  departmentId?: string;
   counts: { teachers: number; subjects: number; classes: number; classSubjects: number };
   validation: {
     issues: string[];
@@ -125,6 +126,37 @@ export interface DepartmentSetupResult {
   };
 }
 
+/** Coverage & balance report (GET /api/balance, POST /api/balance/preview). */
+export type TeacherLoadStatus = "under" | "full" | "balanced";
+
+export interface BalanceSubjectRow {
+  code: string;
+  requiredHours: number;
+  assignedHours: number;
+  /** Hours still left to cover — the headline number while entering data. */
+  remainingHours: number;
+  eligibleTeacherCodes: string[];
+}
+
+export interface BalanceTeacherRow {
+  code: string;
+  name: string;
+  suggestedHours: number;
+  weeklyMaxHours: number;
+  subjects: Array<{ code: string; hours: number }>;
+  status: TeacherLoadStatus;
+}
+
+export interface BalanceReport {
+  perSubject: BalanceSubjectRow[];
+  perTeacher: BalanceTeacherRow[];
+  totals: { requiredHours: number; assignedHours: number; remainingHours: number };
+  averageSuggestedHours: number;
+}
+
+/** Wizard state sent to POST /api/balance/preview (WizardPayload minus department). */
+export type BalancePreviewPayload = Omit<WizardPayload, "department">;
+
 export interface ValidationData {
   issues: string[];
   warnings: string[];
@@ -138,4 +170,21 @@ export interface ValidationData {
     placed: number;
   }>;
   demandByClass: Array<{ classId: string; className: string; total: number }>;
+}
+
+/** One department in GET /api/departments (multi-department storage). */
+export interface DepartmentSummary {
+  id: string;
+  name: string;
+  shortName: string;
+  session: string;
+  effectiveFrom: string;
+  createdAt: string;
+  counts: { teachers: number; subjects: number; classes: number; entries: number };
+  isActive: boolean;
+}
+
+export interface DepartmentsResponse {
+  departments: DepartmentSummary[];
+  activeDepartmentId: string | null;
 }
