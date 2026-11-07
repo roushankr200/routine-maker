@@ -1,7 +1,0 @@
-{% extends "base.html" %}{% block body %}
-<h1>Validation Report (FR10)</h1>
-{% if issues %}<h2 class="bad">Problems</h2><ul>{% for i in issues %}<li class="bad">{{ i }}</li>{% endfor %}</ul>{% else %}<p>✅ No hard data problems found.</p>{% endif %}
-{% if warnings %}<h2>Notes</h2><ul>{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
-<h2>Demand vs capacity per subject</h2>
-<table><tr><th>Code</th><th>Subject</th><th>Demand /week</th><th>Eligible teachers' cap</th><th>Eligible teachers</th><th>Placed</th></tr>
-{% for r in report %}<tr><td>{{ r.subject.code }}</td><td>{{ r.subject.name }}</td><td>{{ r.demand }}</td><td>{{ r.capacity }}</td><td>{{ r.teachers }}</td><td>{{ placed.get(r.subject.id, 0) }}</td></tr>{% endfor %}</table>{% endblock %}
