@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block body %}
+<h1>Classes</h1>
+<form method="post" action="{{ url_for('class_save') }}"><input type="hidden" name="id" id="cid">
+<input name="program" id="cprog" placeholder="Program e.g. MCA" required><input name="year" id="cyear" placeholder="Year / Sem e.g. Sem 1" required><input name="section" id="csec" placeholder="Section (optional)">
+<button class="btn primary">Save Class</button></form>
+{% for c in classes %}<h2>{{ c.name }} — {{ c.total }} periods/week</h2>
+<table><tr><th>Code</th><th>Subject</th><th>Type</th><th>Hours/week</th><th></th></tr>
+{% for r in c.reqs %}<tr><td>{{ r.code }}</td><td>{{ r.name }}</td><td>{{ r.type }}</td><td>{{ r.hours }}</td>
+<td><form class="inline" method="post" action="{{ url_for('class_subject_delete', cid=c.row.id, sid=r.sid) }}"><button class="btn danger">Remove</button></form></td></tr>{% endfor %}</table>
+<form method="post" action="{{ url_for('class_subject_save', cid=c.row.id) }}">
+<select name="subject_id">{% for s in subjects %}<option value="{{ s.id }}">{{ s.code }} — {{ s.name }}</option>{% endfor %}</select>
+<input name="hours" type="number" value="4" min="1" max="42" required style="width:70px"> hrs/week <button class="btn">Set Subject Hours</button>
+<button type="button" class="btn" onclick='cid.value={{ c.row.id }};cprog.value={{ c.row.program|tojson }};cyear.value={{ c.row.year|tojson }};csec.value={{ c.row.section|tojson }}'>Edit Class</button>
+</form>
+<form method="post" action="{{ url_for('class_delete', cid=c.row.id) }}" onsubmit="return confirm('Delete class?')"><button class="btn danger">Delete Class</button></form>
+{% endfor %}{% endblock %}

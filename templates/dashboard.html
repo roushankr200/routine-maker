@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block body %}
+<h1>Dashboard</h1>
+<div class="cards"><div class="card"><b>{{ stats.teachers }}</b><span>Teachers</span></div><div class="card"><b>{{ stats.subjects }}</b><span>Subjects</span></div><div class="card"><b>{{ stats.classes }}</b><span>Classes</span></div><div class="card"><b>{{ stats.entries }}</b><span>Periods placed</span></div></div>
+<h2>Quick actions</h2>
+<form method="post" action="{{ url_for('seed') }}" style="display:inline"><button class="btn primary">Load MCA Demo Data</button></form>
+<form method="post" action="{{ url_for('generate') }}" style="display:inline"><button class="btn success">⚡ Generate Routine</button></form>
+{% if has_routine %}<a class="btn" href="{{ url_for('routine_master') }}">View Master Routine</a><a class="btn" href="{{ url_for('export_master') }}">Export Master CSV</a>
+<form method="post" action="{{ url_for('clear_routine') }}" style="display:inline"><button class="btn danger">Clear Routine</button></form>{% endif %}
+<h2>Demo walkthrough (5 steps)</h2><ol><li>Click <b>Load MCA Demo Data</b> (9 teachers, 9 subjects incl. 2 labs, 3 MCA classes).</li><li>Open <b>Validation</b> — check demand vs teacher capacity per subject.</li><li>Click <b>Generate Routine</b>.</li><li>View <b>Master / per-class / per-teacher</b> routines, export CSV.</li><li>Try a manual <b>Move</b> on the master view — illegal moves are rejected with the rule broken.</li></ol>
+{% if issues %}<h2>⚠️ Validation issues</h2><ul>{% for i in issues %}<li class="bad">{{ i }}</li>{% endfor %}</ul>{% endif %}
+{% if warnings %}<h2>Notes</h2><ul>{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
+{% endblock %}
