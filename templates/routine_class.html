@@ -1,4 +1,0 @@
-{% extends "base.html" %}{% block body %}
-<h1>{{ name }} — Weekly Routine</h1><p><a class="btn" href="{{ url_for('export_class', cid=cl.id) }}">Export CSV</a> <button class="btn" onclick="window.print()">Print</button></p>
-<table><tr><th>Day</th>{% for p in range(1, cfg.periods_per_day+1) %}<th>P{{ p }}</th>{% if cfg.lunch_after==p %}<th>Lunch</th>{% endif %}{% endfor %}</tr>
-{% for d in cfg.days %}<tr><th style="background:#eef;color:#222">{{ d }}</th>{% for p in range(1, cfg.periods_per_day+1) %}{% set e = by.get((d,p)) %}<td class="{{ 'lab' if e and e.stype=='lab' else ('' if e else 'empty') }}">{{ (e.sname ~ ' (' ~ e.scode ~ ') — ' ~ e.tname) if e else '·' }}</td>{% if cfg.lunch_after==p %}<td class="lunch">🍽️</td>{% endif %}{% endfor %}</tr>{% endfor %}</table>{% endblock %}
