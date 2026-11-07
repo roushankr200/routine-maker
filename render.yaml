@@ -1,12 +1,16 @@
 services:
   - type: web
-    name: routine-maker
-    env: python
+    name: routine-maker-mern
+    runtime: node
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.3
-      - key: SECRET_KEY
-        generateValue: true
+      - key: NODE_ENV
+        value: production
+      # Set this manually in the Render dashboard to your MongoDB Atlas
+      # connection string. Without it the server falls back to an
+      # in-memory MongoDB (data resets on restart — demo only).
+      - key: MONGODB_URI
+        sync: false

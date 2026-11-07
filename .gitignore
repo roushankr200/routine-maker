@@ -1,4 +1,4 @@
-.venv/
-__pycache__/
-routine.db
-*.pyc
+node_modules/
+dist/
+.env
+*.log

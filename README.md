@@ -1,90 +1,172 @@
-# Routine Maker — Automatic Department Timetable Generator
+# Routine Maker — MERN + TypeScript
 
-One click turns a department's teachers, subjects, classes and timing rules into a **complete, clash-free weekly master routine**. Built for Roushan Kumar (MCA, NIT Agartala) from the Requirements Analysis v1.0 — Python 3 + Flask + SQLite, with a **custom constraint solver** (no OR-Tools): greedy hardest-first placement + backtracking + soft-score ranking.
+Automatic department master routine / timetable generator: enter teachers,
+subjects, classes and time structure once, press **Generate**, and get a
+conflict-free weekly routine. This is the MERN rebuild of the original
+Flask version — same solver algorithm, same demo data, same behaviour,
+in the stack the author actually works in: **MongoDB, Express, React,
+Node.js, TypeScript throughout.**
 
-## Run it (exact commands)
+## Why MERN?
+
+The constraint solver is the product; the stack around it should be the
+one the author can defend line-by-line in an interview. TypeScript runs
+end to end — the solver, the REST API and the React UI share the same
+language and the same data shapes.
+
+## Stack
+
+| Layer    | Choice |
+|----------|--------|
+| Frontend | React 18 + Vite + TypeScript + Tailwind CSS, React Router, Axios + TanStack React Query, Lucide icons |
+| Backend  | Node.js + Express 4 + TypeScript, Zod validation on every input |
+| Database | MongoDB via Mongoose (Atlas in production; in-memory locally) |
+| Solver   | Custom constraint solver in `server/src/solver/` — no external library |
+| Tests    | Vitest — 8 solver invariant tests, no database needed |
+
+## Quick start (zero setup)
+
+Requires Node 18+. No database account needed for a local run: when
+`MONGODB_URI` is unset the server starts an **in-memory MongoDB**
+(`mongodb-memory-server`) automatically. Data resets on restart in
+that mode.
 
 ```bash
-cd routine-maker
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python app.py            # reads $PORT, default 5000, host 0.0.0.0
-# open http://127.0.0.1:5000
+npm install          # installs both workspaces (server + client)
+npm run build        # builds client (client/dist) and server (server/dist)
+npm start            # one process, one URL: http://localhost:4000
 ```
 
-Production entry point (exact gunicorn command used everywhere in this repo):
+Development (hot reload, two processes):
 
 ```bash
-gunicorn app:app --bind 0.0.0.0:$PORT
+npm run dev          # API on :4000 (tsx watch, in-memory Mongo)
+npm run dev:client   # Vite on :5173, /api proxied to :4000
 ```
 
-Tests:
+With a real database (MongoDB Atlas):
 
 ```bash
-.venv/bin/python -m pytest tests/ -q     # 8 tests
+MONGODB_URI="mongodb+srv://<user>:<pass>@<cluster>/routine-maker" npm start
 ```
 
-The SQLite DB (`routine.db`) is **auto-created on first run** if missing — no setup step.
+Tests (pure solver, in-memory data, no DB):
+
+```bash
+npm test             # vitest: 8 tests
+```
 
 ## Demo walkthrough (5 steps)
 
-1. On the Dashboard, click **Load MCA Demo Data** — 9 teachers, 9 subjects (incl. DBMS Lab & Java Lab), 3 classes (MCA Sem 1 / 3 / 5), Mon–Sat, 7 periods/day, lunch after P4.
-2. Open **Validation** — demand vs eligible-teacher capacity per subject (FR10).
-3. Click **⚡ Generate Routine**.
-4. Browse **Master Routine**, per-class and per-teacher views (with daily/weekly load totals); export any view to **CSV** or print it.
-5. Try the **Manual Move** form on the master view: move a period onto a busy teacher's slot — it is rejected instantly, naming the rule broken (e.g. H1). Legal moves and same-class swaps apply cleanly.
+1. Open the app → **Load MCA Demo Data** (9 teachers, 9 subjects incl.
+   DBMS Lab + Java Lab, 3 classes: MCA Sem 1 / 3 / 5, Mon–Sat,
+   7 periods/day, lunch after P4).
+2. Open **Validation** — demand vs eligible-teacher capacity per subject.
+3. Click **Generate Routine**.
+4. View **Master / By Class / By Teacher** routines (teacher load
+   totals included), export CSV from any view.
+5. On the Master view, try a manual **Move** — an illegal move is
+   rejected instantly with the exact rule it would break
+   (e.g. *"Dr. Anil Sharma already teaches another class at Monday P2 (H1)"*).
 
-**Measured on the demo data (actual runs, not estimates): 86/86 periods placed (78/78 jobs — 70 theory periods + 8 lab blocks), generation ≈ 0.01–0.02 s, search visited 78 nodes (the ordered greedy path succeeded with no backtracking needed on this data), 8/8 tests pass.**
+**Measured on the demo data** (actual runs of this codebase):
+solver places **86/86 periods (78/78 jobs), 0 unplaced**, search
+**78 nodes**, ~**0.02 s**; the HTTP generate call reported
+**0.014 s** end to end. All **8/8 tests pass**.
 
-## Architecture
+## The solver
 
+`server/src/solver/solver.ts` is the centrepiece — read it top to bottom;
+the header comment is the design doc. In short:
+
+1. **Expand** — each class–subject requirement becomes individual jobs:
+   theory = 1-period jobs, labs = 2-period blocks (never spanning lunch).
+2. **Order hardest-first** (fail-first): labs → fewest eligible teachers →
+   most total hours. Constrained jobs placed early leave easy jobs to
+   fill the gaps.
+3. **Place** — depth-first search; every legal (day, start, teacher)
+   candidate is ranked by soft score and tried best-first.
+4. **Backtrack** — a job with no legal candidate undoes the previous
+   placement. A 10 s time limit and node budget bound the search; the
+   best partial result is kept.
+5. **Report honestly** — if data is impossible, unplaced jobs come back
+   with human reasons. A routine that breaks a hard rule is never
+   returned to fake success.
+
+Hard rules: **H1** teacher one class/slot · **H2** class one subject/slot ·
+**H3** teacher max/day · **H4** teacher weekly cap · **H5** exact subject
+hours per class · **H6** teacher–subject eligibility · **H7** availability ·
+**H8** lab continuity (2 consecutive periods, never across lunch).
+Soft preferences (ranking only): **S1** spread a subject across days ·
+**S2** balance teacher load · **S3** avoid middle gaps in a class's day.
+
+The same H1–H7 checks re-validate every manual Move/Swap instantly
+(`server/src/routineCheck.ts`).
+
+## API (all under `/api`, JSON, Zod-validated)
+
+- `GET /dashboard` — counts, issues, warnings
+- `POST /seed` — load the MCA demo dataset
+- Teachers: `GET/POST /teachers`, `PUT/DELETE /teachers/:id`,
+  `GET/PUT /teachers/:id/availability`
+- Subjects: `GET/POST /subjects`, `PUT/DELETE /subjects/:id`
+- Classes: `GET/POST /classes`, `PUT/DELETE /classes/:id`,
+  `POST /classes/:id/subjects`, `DELETE /classes/:id/subjects/:subjectId`
+- `GET/PUT /config` — days, periods/day, lunch position (saving clears the routine)
+- Routine: `GET /routine`, `GET /routine/class/:id`, `GET /routine/teacher/:id`,
+  `POST /routine/generate`, `POST /routine/move`, `POST /routine/swap`,
+  `POST /routine/clear`
+- `GET /validation` — demand vs capacity report
+
+## Deployment (Render, one service, one URL)
+
+`render.yaml` is included: a single Node web service builds both
+workspaces and Express serves the built client as static files.
+
+```text
+Build:  npm install && npm run build
+Start:  npm start            (PORT comes from the environment)
 ```
-app.py       Flask routes: CRUD, setup, generate, views, move/swap, validation, CSV export
-db.py        SQLite layer (stdlib sqlite3): schema, config, solver-data loading, validation
-solver.py    The engine — pure Python, no DB/Flask imports, independently testable
-seed.py      One-click MCA demo data (designed solvable, verified by the test suite)
-templates/   Jinja pages: dashboard, teachers, subjects, classes, setup, availability,
-             master / per-class / per-teacher routine, validation
-static/      style.css (print-friendly)
-tests/       test_solver.py — hard-rule assertions on the generated routine
-routine.db   Created automatically on first run (git-ignored)
+
+Set **`MONGODB_URI`** in the Render dashboard to your MongoDB Atlas
+connection string. Without it the service still runs, but on in-memory
+MongoDB — fine for a demo, but data (and the generated routine) resets
+on every restart/redeploy. For a persistent demo, create a free Atlas
+cluster, allow network access, and paste its connection string.
+
+## Design
+
+UI follows the **UI/UX Pro Max** design system generated for this
+project ("Minimalism & Swiss Style"): teal primary `#0D9488`, orange
+accent `#EA580C` reserved for the primary CTA, Fira Sans for UI +
+Fira Code for codes/numbers, dense dashboard spacing, visible focus
+rings, SVG icons only (Lucide), hover transitions 150–300 ms, and
+`prefers-reduced-motion` respected.
+
+## Known limitations
+
+- **Deploy persistence needs Atlas.** Render's free tier has no
+  persistent disk and MongoDB must live somewhere: set `MONGODB_URI`
+  (free Atlas M0 cluster is enough). Unset = in-memory demo mode.
+- Swap is restricted to entries of the same class (cross-class changes
+  go through Move); a lab moved as a single period is treated as one
+  entry — move both halves for a full lab block.
+- Single active routine, no login/accounts, no room allocation —
+  same out-of-scope list as the original spec (Phase 2/3 items).
+
+## Project layout
+
+```text
+server/src/
+  solver/     types.ts (plain data shapes) + solver.ts (the engine)
+  models.ts   Mongoose models        routes.ts   REST API
+  data.ts     DB -> solver data + validation report
+  seed.ts     demo loader            schemas.ts  Zod input schemas
+  routineCheck.ts  move/swap validation (H1–H7)
+  demoData.ts demo constants shared by seed + tests
+client/src/
+  pages/      Dashboard, Teachers, Availability, Subjects, Classes,
+              Setup, MasterRoutine, ByClass, ByTeacher, Validation
+  components/ Layout + shared UI (grid, banners, chips)
+  utils/csv.ts  client-side CSV export
 ```
-
-Data model (per spec §7): `teacher`, `subject`, `class_section`, `teacher_subject`, `class_subject`, `teacher_unavailable`, `time_slot`, `routine_entry`, plus a single-row `config` (days, periods/day, lunch).
-
-## How the solver works (interview explanation)
-
-**The problem** is a constraint-satisfaction problem: assign every required period to a (day, period, teacher) without breaking hard rules, and prefer nice schedules.
-
-**Hard rules — never broken:** H1 teacher in one class per slot · H2 class has one subject per slot · H3 teacher max/day · H4 teacher weekly cap · H5 exact subject hours per class · H6 teacher only teaches eligible subjects · H7 unavailable slots blocked · H8 labs = 2 consecutive periods, never spanning lunch.
-
-**Step 1 — Expand.** Each `class_subject` row becomes *jobs*: theory hours become 1-period jobs; lab hours become 2-period block jobs. Placing every job *is* H5 by construction, and candidates only ever come from eligible teachers, which is H6 by construction.
-
-**Step 2 — Hardest first (fail-first).** Jobs are sorted: labs before theory (longer = harder to fit), then fewest eligible teachers, then most hours. Constrained jobs get placed while the grid is empty; easy jobs fill the gaps left behind. This ordering is why generation is fast in practice.
-
-**Step 3 — Place + backtrack.** Depth-first search: for the next job, generate every (day, start, teacher) passing all hard checks, rank them by soft score, try in order. If a job has no legal slot, undo the previous placement and try its next candidate. A 10-second limit and node budget bound the search; the best partial placement is remembered.
-
-**Soft scoring — ranking only, never rejection:** S1 +15 if the class already had that subject today (spread across days) · S2 penalty grows with the teacher's load that day/week (balance) · S3 penalty for empty periods trapped between filled ones (no middle gaps).
-
-**Honesty on failure:** if the data is impossible (e.g. a subject needs more periods than its teachers' combined weekly cap), the solver returns the unplaced jobs with reasons — it never emits a routine that breaks a hard rule to look successful. The Validation page flags that shortage *before* you generate.
-
-**Complexity note to be able to defend:** worst case is exponential (timetabling is NP-hard), which is exactly why the ordering heuristic, candidate pruning by hard checks, and the time limit exist. For department scale (demo: 78 jobs) it finishes in ~0.01 s.
-
-## Deploy — Render (free)
-
-This repo is Render-Blueprint ready (`render.yaml`, `Procfile`):
-
-1. Push this folder to a GitHub repo.
-2. On [render.com](https://render.com): **New → Blueprint**, select the repo — Render reads `render.yaml` (build: `pip install -r requirements.txt`, start: `gunicorn app:app --bind 0.0.0.0:$PORT`, free web service). Or **New → Web Service** and enter those build/start commands manually.
-3. Deploy. On first boot the app auto-creates its SQLite DB; open the live URL and click **Load MCA Demo Data → Generate Routine** — the full demo works on the deployed instance.
-4. Notes: `SECRET_KEY` is auto-generated by the Blueprint. Render's free tier has an **ephemeral filesystem**, so `routine.db` resets on redeploys/restarts — fine for a demo (re-seed in one click); a production version would move to a persistent disk or Postgres. Free services also sleep when idle, so the first load can be slow.
-
-## Resume bullets this project now justifies (measured numbers only)
-
-- Built an automatic department timetable generator (Python, Flask, SQLite) that generates a clash-free weekly routine for 3 classes / 9 teachers / 9 subjects in ~0.02 s.
-- Designed a custom constraint solver — hardest-first job ordering, backtracking search, soft-constraint scoring — enforcing 8 hard rules (teacher/class clashes, load caps, lab continuity, availability); 86/86 required periods placed on demo data.
-- Added clash-checked manual editing, a demand-vs-capacity validation report, and CSV export; verified with an 8-test suite asserting every hard rule on the generated routine.
-
-## Known limitations (v1, by design per spec §2.2)
-
-Single active routine; no teacher/student logins; no room allocation; lab odd hours are flagged by validation rather than supported; free-tier deploys lose the DB on restart (see Deploy notes).
