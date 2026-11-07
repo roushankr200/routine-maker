@@ -1,11 +1,72 @@
-# Routine Maker — MERN + TypeScript
+# Routine Maker — CSE Department, NIT Agartala (MERN + TypeScript)
 
-Automatic department master routine / timetable generator: enter teachers,
-subjects, classes and time structure once, press **Generate**, and get a
-conflict-free weekly routine. This is the MERN rebuild of the original
-Flask version — same solver algorithm, same demo data, same behaviour,
-in the stack the author actually works in: **MongoDB, Express, React,
-Node.js, TypeScript throughout.**
+Automatic master routine / timetable generator built **specifically for
+the CSE Department, National Institute of Technology Agartala (NITA)**:
+enter teachers, subjects, classes and time structure once, press
+**Generate**, and get a conflict-free weekly routine in the exact format
+of the department's real master sheet — modelled on the actual
+**CSE DEPARTMENT CLASS ROUTINE (NITA), ODD 2026, w.e.f. 27/07/2026**
+(see `reference/NITA-CSE-ROUTINE-ODD-2026-REFERENCE.md`).
+
+This is the MERN rebuild of the original Flask version — same solver
+algorithm, same behaviour, in the stack the author actually works in:
+**MongoDB, Express, React, Node.js, TypeScript throughout.**
+
+**Product constants vs. per-department content.** One institute —
+**NIT Agartala** — and one **fixed time grid** for every department:
+Mon–Fri, an hourly grid of 7 slots/day from 9:00 AM, lunch 1:00–2:00
+after P4, day ends 5:00 PM. Teaching happens in **block sessions
+merged across the hourly grid** — theory 1–2 consecutive hours, labs
+2–3 consecutive hours, exactly as on the real sheet (see "Session
+model" below). Those never change. What varies
+per department is only its content: the **department name**, session /
+w.e.f. date, **classes/sections, teachers** (codes, eligibility,
+limits, off-days), **courses/subjects**, and the **per-class weekly
+hours**. Every department plugs in its own classes, teachers and
+courses, and gets its routine in the same master format. The
+preloaded department is NITA CSE (the real MCA subjects, faculty and
+faculty codes from the ODD 2026 sheet).
+
+## Setting up a new department — the wizard
+
+CSE is the **preloaded** department, but the product is for the whole
+institute. Any other NITA department (ECE, Civil, ME, …) sets itself up
+through the **question-first wizard** at `/setup/wizard` (linked from
+the Dashboard and from Setup → "Set up a new department"):
+
+1. **Department** — "Which department?" Full name, short name
+   (masthead), session, w.e.f. date. The institute (NIT Agartala) and
+   the time grid are shown as the fixed constants they are — they are
+   never inputs.
+2. **Classes** — "How many classes/sections?" A count generates that
+   many rows (program, semester/year, section); rows can be added or
+   removed freely.
+3. **Courses** — "How many courses?" Rows of code, full name, type
+   (Theory/Lab) and session length (theory 1–2h, lab 2–3h).
+4. **Teachers** — "How many teachers?" Name, faculty code
+   (auto-suggested from initials), max hours/day, max hours/week, the
+   courses they can teach (tick boxes — solver rule H6), and an
+   optional day off.
+5. **Mapping** — for each class, a compact grid of its courses with
+   weekly hours (prefilled suggestions: theory 4h, lab 3h; 0 = not
+   taken), with running totals per class (must fit the 35h grid) and
+   per-course demand vs teacher capacity.
+6. **Review & Create** — the same validation the Validation page uses
+   (demand vs eligible-teacher capacity, grid overflow, courses with
+   no eligible teacher) in plain words. On confirm, **one call**
+   (`POST /api/setup/department`) replaces the current workspace data
+   with the new department — single active department model, stated
+   plainly in the UI before confirming — and sets the Config
+   department/session/w.e.f. from Step 1. The payload is fully
+   validated *before* anything is wiped, so a bad payload changes
+   nothing. "Generate Routine" then runs the normal solver + master
+   sheet flow, with the new department's name in the masthead.
+
+Verified end-to-end on the production build (in-memory Mongo): a
+sample ECE setup (2 classes, 5 courses incl. 1 lab, 4 teachers)
+validates clean, generates **30/30 hours (14/14 sessions), 0
+unplaced**, and the master API carries the ECE masthead data; the
+NITA CSE seed path is unaffected (72/72 hours, 36/36 sessions).
 
 ## Why MERN?
 
@@ -22,7 +83,7 @@ language and the same data shapes.
 | Backend  | Node.js + Express 4 + TypeScript, Zod validation on every input |
 | Database | MongoDB via Mongoose (Atlas in production; in-memory locally) |
 | Solver   | Custom constraint solver in `server/src/solver/` — no external library |
-| Tests    | Vitest — 8 solver invariant tests, no database needed |
+| Tests    | Vitest — 15 solver tests (rule invariants + block-session model), no database needed |
 
 ## Quick start (zero setup)
 
@@ -53,37 +114,95 @@ MONGODB_URI="mongodb+srv://<user>:<pass>@<cluster>/routine-maker" npm start
 Tests (pure solver, in-memory data, no DB):
 
 ```bash
-npm test             # vitest: 8 tests
+npm test             # vitest: 15 tests
 ```
 
 ## Demo walkthrough (5 steps)
 
-1. Open the app → **Load MCA Demo Data** (9 teachers, 9 subjects incl.
-   DBMS Lab + Java Lab, 3 classes: MCA Sem 1 / 3 / 5, Mon–Sat,
-   7 periods/day, lunch after P4).
+1. Open the app → **Load NITA MCA Data** (the real NITA CSE dataset:
+   22 faculty with their sheet codes — DJB, PB, MKDB, TP, … — 21 subjects
+   from the real legend, MCA Sem 1 / 3 / 5, Mon–Fri, hourly grid from
+   9:00, lunch 1:00–2:00 after P4; theory subjects run 2h sessions,
+   labs single 3h blocks). Sem 5 assignments are
+   the ones printed on the real sheet: AI / AI Lab = DJB,
+   CD / CD Lab = PB, E-COMM + WCN = MKDB, DIP = TP.
 2. Open **Validation** — demand vs eligible-teacher capacity per subject.
 3. Click **Generate Routine**.
-4. View **Master / By Class / By Teacher** routines (teacher load
-   totals included), export CSV from any view.
-5. On the Master view, try a manual **Move** — an illegal move is
-   rejected instantly with the exact rule it would break
-   (e.g. *"Dr. Anil Sharma already teaches another class at Monday P2 (H1)"*).
+4. View the **Master sheet** (NITA format, below) / By Class / By
+   Teacher routines (teacher load totals included), export CSV from
+   any view, or **Print** the master sheet for the notice board.
+5. On the Master view, click any cell to select its session, then try
+   a manual **Move** — the whole block moves together, and an illegal
+   move is rejected instantly with the exact reason (e.g. *"Move
+   rejected: A 3h session starting at Monday P3 would cross the lunch
+   break."*).
 
-**Measured on the demo data** (actual runs of this codebase):
-solver places **86/86 periods (78/78 jobs), 0 unplaced**, search
-**78 nodes**, ~**0.02 s**; the HTTP generate call reported
-**0.014 s** end to end. All **8/8 tests pass**.
+**Measured on the NITA demo data** (actual runs of this codebase):
+solver places **72/72 hours (36/36 sessions), 0 unplaced**, search
+**36 nodes**, **0.01 s** via the HTTP generate call. All **15/15 tests
+pass**.
+
+## Session model (the real sheet's blocks, not single periods)
+
+The grid is hourly, but nobody at NITA teaches in single hours. Every
+subject carries a **session length** (`sessionHours` on the Subject,
+editable on the Subjects page):
+
+- **Theory: 1–2 consecutive hours, default 2** (the sheet's common
+  pattern: `DMS` Mon 9:00–11:00; 1h singles like `NM` 11–12 exist).
+- **Lab: 2–3 consecutive hours, default 3** (3h blocks sit 9–12 or
+  2–5 on the real sheet; 2h labs like `AI Lab` 11–1 exist too).
+
+A class-subject's weekly hours split into sessions of that length,
+plus **one shorter remainder session** when they don't divide evenly
+(theory 4h @2 → 2+2; theory 3h @2 → 2+1; lab 3h @3 → one block).
+A session must sit entirely inside the morning segment (P1–P4) or the
+afternoon segment (P5–P7) — **no session ever crosses lunch**, so a
+3h block can only start at P1, P2 or P5. In the demo seed each class
+runs 12 sessions/week: five theory subjects (2+2 or 2+1) and two labs
+as single 3h blocks — Sem 1 = 25h, Sem 3 = 24h, Sem 5 = 23h.
+
+## The master sheet (NITA format)
+
+The Master Routine page reproduces the department's real sheet:
+
+- **Masthead** — "NATIONAL INSTITUTE OF TECHNOLOGY AGARTALA"
+  (institute: fixed, always) / "**CSE** DEPARTMENT CLASS ROUTINE
+  (NITA)" — only the department line varies, from the Config
+  `department` / `departmentShort` fields (another department reads
+  e.g. "ECE DEPARTMENT CLASS ROUTINE (NITA)") — + session line
+  (`ODD 2026, w.e.f. 27/07/2026`; session and w.e.f. date are Config
+  fields, editable in Setup).
+- **One table per day** — rows = classes/sections, columns = periods
+  headed by **clock times** computed from Config's day start +
+  period duration (lunch occupies one period-length slot in the
+  clock, exactly like the real sheet: P1 9:00–10:00 … P4 12:00–1:00,
+  **LUNCH 1:00–2:00**, P5 2:00–3:00 … P7 4:00–5:00).
+- **Sheet notation in cells** — `SUBJECT - TEACHERCODE`
+  (`AI - DJB`, `E-COMM - MKDB`), with every session **merged across
+  its hours** (colSpan = session length): a 2h theory block reads as
+  one cell over 9:00–11:00, a 3h lab as one cell over 2:00–5:00 —
+  exactly the real sheet's rendering. Faculty codes live on the
+  Teacher record (the Teachers form auto-suggests initials); codes
+  fall back to name initials when unset.
+- **Legends below the sheet**, like the real sheet's footer —
+  Faculty: `DJB = Dr. Dhrubajyoti Bhowmik`, … · Subjects:
+  `AI = Artificial Intelligence`, … (only codes the routine uses).
+- **Print** — a print stylesheet renders just the masthead, grids and
+  legends, black-on-white, landscape: the notice-board output.
 
 ## The solver
 
 `server/src/solver/solver.ts` is the centrepiece — read it top to bottom;
 the header comment is the design doc. In short:
 
-1. **Expand** — each class–subject requirement becomes individual jobs:
-   theory = 1-period jobs, labs = 2-period blocks (never spanning lunch).
-2. **Order hardest-first** (fail-first): labs → fewest eligible teachers →
-   most total hours. Constrained jobs placed early leave easy jobs to
-   fill the gaps.
+1. **Expand** — each class–subject requirement becomes session jobs:
+   weekly hours split into blocks of the subject's session length
+   (+ one remainder session), each block placed whole, never spanning
+   lunch or a segment boundary.
+2. **Order hardest-first** (fail-first): longest sessions → fewest
+   eligible teachers → most total hours. Constrained blocks placed
+   early leave easy sessions to fill the gaps.
 3. **Place** — depth-first search; every legal (day, start, teacher)
    candidate is ranked by soft score and tried best-first.
 4. **Backtrack** — a job with no legal candidate undoes the previous
@@ -94,25 +213,36 @@ the header comment is the design doc. In short:
    returned to fake success.
 
 Hard rules: **H1** teacher one class/slot · **H2** class one subject/slot ·
-**H3** teacher max/day · **H4** teacher weekly cap · **H5** exact subject
-hours per class · **H6** teacher–subject eligibility · **H7** availability ·
-**H8** lab continuity (2 consecutive periods, never across lunch).
-Soft preferences (ranking only): **S1** spread a subject across days ·
-**S2** balance teacher load · **S3** avoid middle gaps in a class's day.
+**H3** teacher max/day · **H4** teacher weekly cap (H3/H4 count HOURS,
+since sessions are blocks) · **H5** exact subject hours per class ·
+**H6** teacher–subject eligibility · **H7** availability ·
+**H8** lab sessions are single unbroken blocks of their session
+length, never across lunch (no session of any kind crosses lunch).
+Soft preferences (ranking only): **S1** spread a subject's sessions
+across days · **S2** balance teacher load · **S3** avoid middle gaps
+in a class's day.
 
-The same H1–H7 checks re-validate every manual Move/Swap instantly
-(`server/src/routineCheck.ts`).
+The same checks re-validate every manual Move/Swap instantly
+(`server/src/routineCheck.ts`): moving an entry moves its **whole
+session block**, and the full span is clash-checked before applying.
 
 ## API (all under `/api`, JSON, Zod-validated)
 
 - `GET /dashboard` — counts, issues, warnings
 - `POST /seed` — load the MCA demo dataset
+- `POST /setup/department` — the New Department wizard's single commit
+  endpoint: full department payload (identity + classes + courses +
+  teachers + hours mapping, cross-referenced by course code),
+  validated before the workspace is replaced; returns counts + the
+  validation summary
 - Teachers: `GET/POST /teachers`, `PUT/DELETE /teachers/:id`,
   `GET/PUT /teachers/:id/availability`
 - Subjects: `GET/POST /subjects`, `PUT/DELETE /subjects/:id`
 - Classes: `GET/POST /classes`, `PUT/DELETE /classes/:id`,
   `POST /classes/:id/subjects`, `DELETE /classes/:id/subjects/:subjectId`
-- `GET/PUT /config` — days, periods/day, lunch position (saving clears the routine)
+- `GET/PUT /config` — department name + short name, session + w.e.f.
+  header texts, and the (institute-fixed) time grid: days, periods/day,
+  lunch position, period duration, day start time (saving clears the routine)
 - Routine: `GET /routine`, `GET /routine/class/:id`, `GET /routine/teacher/:id`,
   `POST /routine/generate`, `POST /routine/move`, `POST /routine/swap`,
   `POST /routine/clear`
@@ -148,11 +278,32 @@ rings, SVG icons only (Lucide), hover transitions 150–300 ms, and
 - **Deploy persistence needs Atlas.** Render's free tier has no
   persistent disk and MongoDB must live somewhere: set `MONGODB_URI`
   (free Atlas M0 cluster is enough). Unset = in-memory demo mode.
-- Swap is restricted to entries of the same class (cross-class changes
-  go through Move); a lab moved as a single period is treated as one
-  entry — move both halves for a full lab block.
-- Single active routine, no login/accounts, no room allocation —
-  same out-of-scope list as the original spec (Phase 2/3 items).
+- Swap is restricted to sessions of the same class (cross-class
+  changes go through Move). Move/Swap always operate on whole session
+  blocks; a swap is rejected when either block cannot legally sit at
+  the other's start (e.g. a 3h lab into a 2h gap).
+- Single active routine, no login/accounts — same out-of-scope list
+  as the original spec (Phase 2/3 items).
+
+## Roadmap — v3 (from the real sheet, reference §8)
+
+The ODD 2026 sheet contains structures the current model deliberately
+does not fake yet:
+
+- **Rooms** as typed data (theory vs lab rooms) — cells become
+  `DBMS - 5A-SN-G07`, with room clash-checking added to H-rules.
+- **Lab groups** — sections split into A1/A2 halves running different
+  labs in parallel in the same block. (Single-cohort block sessions —
+  theory 1–2h, labs 2–3h — are already implemented; this is about the
+  parallel split-cohort variant.)
+- **Multi-staff labs** — faculty + technical assistant + scholar
+  placeholder (`DBMS Lab - 5A1 - RD, VD, Sch - 215`).
+- **Combined cohorts for electives** — one class, two programmes
+  (DIP: MCA 5th + BTMT 7th), and parallel elective groups.
+- **Unassigned slots** — teacher `XX` tolerated and surfaced, as the
+  real sheet prints them.
+- **Teacher-code aliases** — the real sheet itself lists one person
+  under two codes (AS / ABC); identity must dedupe by person.
 
 ## Project layout
 
@@ -166,7 +317,8 @@ server/src/
   demoData.ts demo constants shared by seed + tests
 client/src/
   pages/      Dashboard, Teachers, Availability, Subjects, Classes,
-              Setup, MasterRoutine, ByClass, ByTeacher, Validation
+              Setup, DepartmentWizard (the New Department wizard),
+              MasterRoutine, ByClass, ByTeacher, Validation
   components/ Layout + shared UI (grid, banners, chips)
   utils/csv.ts  client-side CSV export
 ```

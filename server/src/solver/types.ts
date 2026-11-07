@@ -26,6 +26,32 @@ export interface SubjectData {
   name: string;
   code: string;
   type: "theory" | "lab";
+  /**
+   * Length (in hourly grid slots) of ONE session of this subject, as on
+   * the real NITA sheet: theory sessions run 1–2 consecutive hours
+   * (default 2), lab sessions 2–3 consecutive hours (default 3).
+   * A class-subject's weekly hours are split into sessions of this
+   * length, plus one shorter remainder session when hours do not
+   * divide evenly (e.g. theory 3h @ 2h/session -> 2h + 1h).
+   */
+  sessionHours: number;
+}
+
+/** Default session length by subject type (real-sheet pattern). */
+export function defaultSessionHours(type: "theory" | "lab"): number {
+  return type === "lab" ? 3 : 2;
+}
+
+/**
+ * Normalise a stored sessionHours value: fall back to the type default
+ * when missing/out of range (theory 1–2, lab 2–3).
+ */
+export function sessionHoursOf(subject: SubjectData): number {
+  const fallback = defaultSessionHours(subject.type);
+  const v = subject.sessionHours;
+  if (!Number.isInteger(v)) return fallback;
+  if (subject.type === "theory") return v >= 1 && v <= 2 ? v : fallback;
+  return v >= 2 && v <= 3 ? v : fallback;
 }
 
 export interface ClassSubjectData {
@@ -39,14 +65,33 @@ export interface ScheduleConfig {
   periodsPerDay: number;
   /** Lunch sits after this period number, or null for no lunch break. */
   lunchAfter: number | null;
+  /**
+   * Presentation-only fields (the solver ignores them): they let the
+   * master sheet print real clock times and the session header, the
+   * way the NITA CSE master routine does. The grid unit is one hour:
+   * times are computed from startTime + periodDuration, with lunch
+   * occupying one grid slot in the clock (NITA pattern: hourly grid
+   * from 9:00, lunch 1–2). Sessions are BLOCKS merged across hours.
+   */
+  periodDuration?: number;
+  startTime?: string; // "HH:MM", 24h
+  session?: string; // e.g. "ODD 2026"
+  effectiveFrom?: string; // "w.e.f." date text, e.g. "27/07/2026"
+  /** Department full name, e.g. "Computer Science and Engineering". */
+  department?: string;
+  /** Department short name for the sheet masthead, e.g. "CSE". */
+  departmentShort?: string;
 }
 
-/** One placeable unit: 1 period of theory, or one 2-period lab block. */
+/**
+ * One placeable unit: a single SESSION — a block of consecutive hourly
+ * slots (theory 1–2h, lab 2–3h, or a shorter remainder session).
+ */
 export interface Job {
   jobIndex: number;
   classId: string;
   subjectId: string;
-  duration: number; // 1 = theory, 2 = lab block
+  duration: number; // session length in hourly slots
   eligibleTeachers: string[]; // teacher ids allowed by H6, insertion order
 }
 
@@ -64,7 +109,7 @@ export interface UnplacedJob {
   reason: string;
 }
 
-/** One single-period row of the final routine (labs flatten to 2 rows). */
+/** One hourly row of the final routine (a session flattens to `duration` rows). */
 export interface RoutineEntryData {
   classId: string;
   subjectId: string;

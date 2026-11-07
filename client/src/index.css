@@ -53,6 +53,41 @@
   .chip {
     @apply inline-flex items-center rounded-full px-2 py-0.5 font-mono text-xs font-medium;
   }
+  /* The master sheet — a formal department document (NITA format):
+     full hairline grid, time-headed columns, merged LUNCH column. */
+  .sheet-table {
+    @apply w-full border-collapse bg-white text-sm;
+  }
+  .sheet-table th,
+  .sheet-table td {
+    border: 1px solid #9db8b3;
+    padding: 4px 6px;
+  }
+  .sheet-table thead th {
+    @apply bg-primary-dark text-center font-semibold text-white;
+  }
+  .sheet-table thead th:first-child {
+    @apply text-left;
+  }
+  .sheet-lunch-head {
+    background-color: #c2410c; /* accent-dark token, stronger than the teal period heads */
+    color: #fff;
+  }
+  .sheet-lunch-body {
+    @apply bg-orange-50 text-center align-middle font-bold tracking-[0.3em] text-accent-dark;
+    writing-mode: vertical-rl;
+  }
+  .sheet-lab {
+    @apply bg-orange-50;
+  }
+  .sheet-cell button:hover {
+    @apply bg-teal-50;
+  }
+  .sheet-selected {
+    outline: 2px solid #ea580c;
+    outline-offset: -2px;
+    @apply bg-orange-100;
+  }
 }
 
 /* Respect reduced motion (skill pre-delivery checklist) */
@@ -66,7 +101,44 @@
 }
 
 @media print {
+  @page {
+    size: landscape;
+    margin: 10mm;
+  }
   .no-print {
     display: none !important;
+  }
+  body {
+    background: #fff !important;
+  }
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+  .overflow-x-auto {
+    overflow: visible !important;
+  }
+  /* Notice-board output: clean black-on-white grid + legends. */
+  .card {
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+  .master-doc {
+    color: #000 !important;
+  }
+  .master-doc * {
+    color: #000 !important;
+    background: #fff !important;
+  }
+  .sheet-table th,
+  .sheet-table td {
+    border: 1px solid #000 !important;
+  }
+  .sheet-day {
+    break-inside: avoid;
+  }
+  .sheet-selected {
+    outline: none !important;
   }
 }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, Play, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Database, Play, Trash2, Wand2 } from "lucide-react";
 import { clearRoutine, errorMessage, fetchDashboard, generateRoutine, seedDemo } from "../api";
 import { Banner, PageTitle } from "../components/ui";
 
@@ -52,8 +53,11 @@ export default function Dashboard() {
     <div>
       <PageTitle title="Dashboard">
         <button className="btn-ghost" onClick={() => seed.mutate()} disabled={seed.isPending}>
-          <Database className="h-4 w-4" aria-hidden /> Load MCA Demo Data
+          <Database className="h-4 w-4" aria-hidden /> Load NITA MCA Data
         </button>
+        <Link className="btn-ghost" to="/setup/wizard">
+          <Wand2 className="h-4 w-4" aria-hidden /> Set up a new department
+        </Link>
         <button className="btn-accent" onClick={() => generate.mutate()} disabled={generate.isPending}>
           <Play className="h-4 w-4" aria-hidden /> Generate Routine
         </button>
@@ -95,14 +99,27 @@ export default function Dashboard() {
       )}
 
       <div className="card mt-5 px-5 py-4">
-        <h2 className="mb-2 font-semibold">Demo walkthrough (5 steps)</h2>
+        <h2 className="mb-2 font-semibold">Two ways to use Routine Maker</h2>
+        <p className="mb-2 text-sm">
+          <strong>Path A — the built-in department:</strong> NIT Agartala CSE comes preloaded.
+        </p>
         <ol className="list-inside list-decimal space-y-1 text-sm">
-          <li>Click Load MCA Demo Data (9 teachers, 9 subjects incl. 2 labs, 3 MCA classes).</li>
+          <li>Click Load NITA MCA Data (22 faculty, 21 subjects incl. 6 labs, MCA Sem 1 / 3 / 5 — the real NITA CSE subjects and faculty codes, Mon–Fri).</li>
           <li>Open Validation — check demand vs teacher capacity per subject.</li>
           <li>Click Generate Routine.</li>
-          <li>View Master / per-class / per-teacher routines, export CSV.</li>
+          <li>View the Master sheet (NITA format: time-headed columns, LUNCH, faculty + subject legends) / per-class / per-teacher routines, export CSV, or print the master sheet.</li>
           <li>Try a manual Move on the master view — illegal moves are rejected with the rule broken.</li>
         </ol>
+        <p className="mb-2 mt-4 text-sm">
+          <strong>Path B — any other NITA department</strong> (ECE, Civil, ME, …):{" "}
+          <Link className="font-medium text-primary-dark underline" to="/setup/wizard">
+            open the setup wizard
+          </Link>
+          . The institute and the time grid never change — the wizard only asks the
+          department's name, how many classes, courses and teachers it has, and the weekly
+          hours per class; then the same rule engine generates its routine in the same
+          master format.
+        </p>
       </div>
     </div>
   );

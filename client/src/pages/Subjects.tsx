@@ -5,7 +5,7 @@ import { deleteSubject, errorMessage, fetchSubjects, saveSubject } from "../api"
 import type { Subject } from "../types";
 import { Banner, PageTitle, SubjectChip } from "../components/ui";
 
-const empty: Partial<Subject> = { name: "", code: "", type: "theory" };
+const empty: Partial<Subject> = { name: "", code: "", type: "theory", sessionHours: 2 };
 
 export default function Subjects() {
   const qc = useQueryClient();
@@ -45,7 +45,7 @@ export default function Subjects() {
         }}
       >
         <h2 className="mb-3 font-semibold">{form.id ? "Edit subject" : "Add subject"}</h2>
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-4">
           <div>
             <label className="label" htmlFor="s-name">Name</label>
             <input id="s-name" className="input" required value={form.name ?? ""}
@@ -59,10 +59,26 @@ export default function Subjects() {
           <div>
             <label className="label" htmlFor="s-type">Type</label>
             <select id="s-type" className="input" value={form.type ?? "theory"}
-              onChange={(e) => setForm({ ...form, type: e.target.value as Subject["type"] })}>
-              <option value="theory">Theory (1-period jobs)</option>
-              <option value="lab">Lab (2 consecutive periods, H8)</option>
+              onChange={(e) => {
+                const type = e.target.value as Subject["type"];
+                // Session length follows the type's real-sheet default.
+                setForm({ ...form, type, sessionHours: type === "lab" ? 3 : 2 });
+              }}>
+              <option value="theory">Theory</option>
+              <option value="lab">Lab</option>
             </select>
+          </div>
+          <div>
+            <label className="label" htmlFor="s-session">Session length (hours)</label>
+            <select id="s-session" className="input" value={form.sessionHours ?? (form.type === "lab" ? 3 : 2)}
+              onChange={(e) => setForm({ ...form, sessionHours: Number(e.target.value) })}>
+              {(form.type === "lab" ? [2, 3] : [1, 2]).map((h) => (
+                <option key={h} value={h}>{h}h block{h > 1 ? "s" : ""}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-muted">
+              One session = consecutive hours on the grid (real sheet: theory 1–2h, labs 2–3h).
+            </p>
           </div>
         </div>
         <div className="mt-4 flex gap-2">
@@ -84,6 +100,7 @@ export default function Subjects() {
               <th className="th">Code</th>
               <th className="th">Name</th>
               <th className="th">Type</th>
+              <th className="th">Session</th>
               <th className="th">Actions</th>
             </tr>
           </thead>
@@ -93,6 +110,7 @@ export default function Subjects() {
                 <td className="td"><SubjectChip code={s.code} type={s.type} /></td>
                 <td className="td font-medium">{s.name}</td>
                 <td className="td capitalize">{s.type}</td>
+                <td className="td font-mono">{s.sessionHours ?? (s.type === "lab" ? 3 : 2)}h blocks</td>
                 <td className="td">
                   <div className="flex gap-1">
                     <button className="btn-ghost !min-h-[36px] px-2" aria-label={`Edit ${s.name}`}
@@ -108,7 +126,7 @@ export default function Subjects() {
               </tr>
             ))}
             {subjects.length === 0 && (
-              <tr><td className="td text-muted" colSpan={4}>No subjects yet.</td></tr>
+              <tr><td className="td text-muted" colSpan={5}>No subjects yet.</td></tr>
             )}
           </tbody>
         </table>

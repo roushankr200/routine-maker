@@ -1,4 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { fetchConfig } from "../api";
 import {
   BookOpen,
   CalendarRange,
@@ -23,6 +25,10 @@ const links = [
 ];
 
 export default function Layout() {
+  // The institute never changes; the department line follows Config —
+  // CSE is the preloaded department, the wizard can replace it (ECE…).
+  const { data: config } = useQuery({ queryKey: ["config"], queryFn: fetchConfig });
+  const deptLine = `${config?.departmentShort ?? "CSE"} Department · NIT Agartala`;
   return (
     <div className="flex min-h-screen">
       {/* Sidebar — Swiss/minimal: white, strong grid lines, teal active state */}
@@ -31,7 +37,7 @@ export default function Layout() {
           <div className="font-mono text-lg font-semibold tracking-tight text-primary-dark">
             Routine Maker
           </div>
-          <p className="text-xs text-muted">Automatic timetable generator</p>
+          <p className="text-xs text-muted">{deptLine}</p>
         </div>
         <nav aria-label="Main" className="flex flex-col gap-1 p-3">
           {links.map(({ to, label, icon: Icon, end }) => (
@@ -61,6 +67,7 @@ export default function Layout() {
         {/* Mobile top nav */}
         <div className="no-print border-b border-line bg-white px-4 py-3 md:hidden">
           <div className="font-mono font-semibold text-primary-dark">Routine Maker</div>
+          <p className="text-xs text-muted">{deptLine}</p>
           <nav aria-label="Main" className="mt-2 flex flex-wrap gap-1">
             {links.map(({ to, label, end }) => (
               <NavLink

@@ -11,8 +11,9 @@ import {
 } from "../api";
 import type { Teacher } from "../types";
 import { Banner, PageTitle } from "../components/ui";
+import { initialsCode } from "../utils/time";
 
-const empty: Partial<Teacher> = { name: "", designation: "", maxPerDay: 4, weeklyHours: 16, subjects: [] };
+const empty: Partial<Teacher> = { name: "", code: "", designation: "", maxPerDay: 4, weeklyHours: 16, subjects: [] };
 
 export default function Teachers() {
   const qc = useQueryClient();
@@ -63,11 +64,29 @@ export default function Teachers() {
         }}
       >
         <h2 className="mb-3 font-semibold">{form.id ? "Edit teacher" : "Add teacher"}</h2>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <div>
             <label className="label" htmlFor="t-name">Name</label>
             <input id="t-name" className="input" required value={form.name ?? ""}
-              onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              onChange={(e) => {
+                const name = e.target.value;
+                // Auto-suggest the faculty code from initials (Dr. Dhrubajyoti
+                // Bhowmik -> DJB) until the user types a code of their own.
+                setForm((f) => ({
+                  ...f,
+                  name,
+                  code:
+                    !f.code || f.code === initialsCode(f.name ?? "")
+                      ? initialsCode(name)
+                      : f.code,
+                }));
+              }} />
+          </div>
+          <div>
+            <label className="label" htmlFor="t-code">Faculty code (sheet)</label>
+            <input id="t-code" className="input font-mono" placeholder="DJB" maxLength={12}
+              value={form.code ?? ""}
+              onChange={(e) => setForm({ ...form, code: e.target.value })} />
           </div>
           <div>
             <label className="label" htmlFor="t-desig">Designation</label>
@@ -118,6 +137,7 @@ export default function Teachers() {
           <thead>
             <tr className="border-b-2 border-primary/60">
               <th className="th">Name</th>
+              <th className="th">Code</th>
               <th className="th">Designation</th>
               <th className="th">Max/day</th>
               <th className="th">Weekly hrs</th>
@@ -129,6 +149,7 @@ export default function Teachers() {
             {teachers.map((t) => (
               <tr key={t.id} className="border-b border-line">
                 <td className="td font-medium">{t.name}</td>
+                <td className="td font-mono font-semibold">{t.code || "—"}</td>
                 <td className="td text-muted">{t.designation}</td>
                 <td className="td font-mono">{t.maxPerDay}</td>
                 <td className="td font-mono">{t.weeklyHours}</td>
@@ -154,7 +175,7 @@ export default function Teachers() {
               </tr>
             ))}
             {teachers.length === 0 && (
-              <tr><td className="td text-muted" colSpan={6}>No teachers yet — add one above or load demo data.</td></tr>
+              <tr><td className="td text-muted" colSpan={7}>No teachers yet — add one above or load demo data.</td></tr>
             )}
           </tbody>
         </table>

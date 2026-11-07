@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import { AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
 import type { RoutineEntry, ScheduleConfig } from "../types";
+import { periodRange, sessionRange } from "../utils/time";
 
 /** Inline feedback banner — success / error / info, text + icon + colour (never colour alone). */
 export function Banner({
@@ -40,15 +41,61 @@ export function SubjectChip({ code, type }: { code: string; type: "theory" | "la
       className={`chip ${type === "lab" ? "bg-orange-100 text-orange-800" : "bg-teal-100 text-teal-900"}`}
     >
       {code}
-      {type === "lab" ? " · LAB" : ""}
+      {/* NITA lab codes already carry "Lab" ("AI Lab") — don't print it twice. */}
+      {type === "lab" && !/lab/i.test(code) ? " · LAB" : ""}
     </span>
   );
 }
 
+export interface SessionCell {
+  /** First entry of the block (its id identifies the session). */
+  entry: RoutineEntry;
+  start: number;
+  length: number;
+}
+
 /**
- * The weekly grid: rows = days, columns = periods, with a LUNCH column
- * inserted after the lunchAfter period. `entries` must already be
- * filtered to the class/teacher being shown.
+ * Group a day's flattened hourly entries into SESSION BLOCKS: maximal
+ * runs of consecutive periods with the same class, subject and teacher.
+ * (Sessions never cross lunch, so a run never spans the break.)
+ */
+export function sessionBlocks(entries: RoutineEntry[], day: string): Map<number, SessionCell> {
+  const by = new Map(entries.filter((e) => e.day === day).map((e) => [e.period, e]));
+  const blocks = new Map<number, SessionCell>();
+  const periods = [...by.keys()].sort((a, b) => a - b);
+  for (const p of periods) {
+    const e = by.get(p)!;
+    const prev = by.get(p - 1);
+    // Start a run at p when the previous period is not the same session.
+    const continuesPrev =
+      prev !== undefined &&
+      prev.classId === e.classId &&
+      prev.subjectId === e.subjectId &&
+      prev.teacherId === e.teacherId;
+    if (continuesPrev) continue;
+    let length = 1;
+    while (true) {
+      const nxt = by.get(p + length);
+      if (
+        nxt &&
+        nxt.classId === e.classId &&
+        nxt.subjectId === e.subjectId &&
+        nxt.teacherId === e.teacherId
+      ) {
+        length++;
+      } else break;
+    }
+    blocks.set(p, { entry: e, start: p, length });
+  }
+  return blocks;
+}
+
+/**
+ * The weekly grid: rows = days, columns = hourly slots, with a LUNCH
+ * column inserted after the lunchAfter slot. Sessions render MERGED
+ * across their hours (colSpan = block length) with their start–end
+ * clock time (e.g. 9:00–11:00). `entries` must already be filtered to
+ * the class/teacher being shown.
  */
 export function RoutineGrid({
   config,
@@ -59,7 +106,6 @@ export function RoutineGrid({
   entries: RoutineEntry[];
   cellMode: "class" | "teacher" | "master";
 }) {
-  const by = new Map(entries.map((e) => [`${e.day}|${e.period}`, e]));
   const periods = Array.from({ length: config.periodsPerDay }, (_, i) => i + 1);
   return (
     <div className="overflow-x-auto">
@@ -69,43 +115,60 @@ export function RoutineGrid({
             <th className="th">Day</th>
             {periods.map((p) => (
               <Fragment key={p}>
-                <th className="th text-center">P{p}</th>
+                <th className="th text-center">
+                  P{p}
+                  <span className="block font-mono text-[11px] font-normal normal-case">
+                    {periodRange(config, p)}
+                  </span>
+                </th>
                 {config.lunchAfter === p && <th className="th bg-teal-50 text-center">Break</th>}
               </Fragment>
             ))}
           </tr>
         </thead>
         <tbody>
-          {config.days.map((day) => (
-            <tr key={day} className="border-b border-line align-top">
-              <td className="td whitespace-nowrap font-medium">{day}</td>
-              {periods.map((p) => {
-                const e = by.get(`${day}|${p}`);
-                return (
-                  <Fragment key={p}>
-                    <td className="td min-w-[110px] text-center">
-                      {e ? (
-                        <div>
-                          <SubjectChip code={e.subjectCode} type={e.subjectType} />
-                          <div className="mt-1 text-xs text-muted">
-                            {cellMode === "teacher" ? e.className : e.teacherName}
-                          </div>
-                          {cellMode === "master" && (
-                            <div className="text-xs text-muted">{e.className}</div>
+          {config.days.map((day) => {
+            const blocks = sessionBlocks(entries, day);
+            const covered = new Set<number>();
+            for (const b of blocks.values()) {
+              for (let i = 1; i < b.length; i++) covered.add(b.start + i);
+            }
+            return (
+              <tr key={day} className="border-b border-line align-top">
+                <td className="td whitespace-nowrap font-medium">{day}</td>
+                {periods.map((p) => {
+                  const block = blocks.get(p);
+                  return (
+                    <Fragment key={p}>
+                      {!covered.has(p) && (
+                        <td className="td min-w-[110px] text-center" colSpan={block?.length ?? 1}>
+                          {block ? (
+                            <div>
+                              <SubjectChip code={block.entry.subjectCode} type={block.entry.subjectType} />
+                              <div className="mt-1 text-xs text-muted">
+                                {cellMode === "teacher" ? block.entry.className : block.entry.teacherName}
+                              </div>
+                              {cellMode === "master" && (
+                                <div className="text-xs text-muted">{block.entry.className}</div>
+                              )}
+                              <div className="mt-0.5 font-mono text-[11px] font-medium text-primary-dark">
+                                {sessionRange(config, block.start, block.length)}
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-slate-300">—</span>
                           )}
-                        </div>
-                      ) : (
-                        <span className="text-slate-300">—</span>
+                        </td>
                       )}
-                    </td>
-                    {config.lunchAfter === p && (
-                      <td className="td bg-teal-50/60 text-center text-xs text-muted">LUNCH</td>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tr>
-          ))}
+                      {config.lunchAfter === p && (
+                        <td className="td bg-teal-50/60 text-center text-xs text-muted">LUNCH</td>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

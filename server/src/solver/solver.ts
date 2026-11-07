@@ -5,37 +5,51 @@
  * external library — just greedy placement, hardest-first ordering and
  * backtracking, written to be read.
  *
+ * Session model (the real NITA sheet)
+ * -----------------------------------
+ * The grid is HOURLY (9–10, 10–11, …, lunch 1–2, …, 4–5), but teaching
+ * happens in BLOCKS merged across hours — not in single hours:
+ * theory sessions run 1–2 consecutive hours (2h is the common pattern),
+ * lab sessions 2–3 consecutive hours (3h blocks sit 9–12 or 2–5).
+ * Each subject carries `sessionHours` (theory default 2, lab default 3);
+ * a class-subject's weekly hours split into sessions of that length,
+ * plus one shorter remainder session when they do not divide evenly
+ * (theory 4h @2 -> 2+2; theory 3h @2 -> 2+1; lab 3h @3 -> one block).
+ * A session must sit entirely inside the morning segment (P1–P4) or
+ * the afternoon segment (P5–P7): it NEVER crosses the lunch break.
+ *
  * Problem
  * -------
- * We must assign every required period ("job") for every class to a
- * (day, period, teacher) such that no hard rule is broken:
+ * We must assign every session ("job") for every class to a
+ * (day, start slot, teacher) such that no hard rule is broken:
  *
  *     H1  One teacher, one class per slot.
  *     H2  One class, one subject per slot.
- *     H3  A teacher never exceeds max classes per day.
- *     H4  A teacher's weekly assigned periods never exceed weeklyHours.
+ *     H3  A teacher never exceeds max classes per day (counted in HOURS).
+ *     H4  A teacher's weekly assigned HOURS never exceed weeklyHours.
  *     H5  Every class gets *exactly* its required hours per subject
- *         (guaranteed by construction: we expand hours into jobs and
- *         only claim success when every job is placed).
+ *         (guaranteed by construction: we expand hours into sessions
+ *         whose lengths sum to the required hours, and only claim
+ *         success when every session is placed).
  *     H6  A teacher teaches only subjects they are eligible for
  *         (guaranteed by construction: candidates come from the
  *         eligible-teacher list of the job's subject).
  *     H7  A teacher is never placed in an unavailable slot.
- *     H8  A lab occupies 2 consecutive periods on the same day, and
- *         never spans the lunch break.
+ *     H8  A lab session is one unbroken block of its session length
+ *         on the same day, never spanning the lunch break (the same
+ *         no-lunch-crossing rule applies to every session).
  *
  * Soft preferences (used only to *rank* candidates, never to reject one):
  *
- *     S1  Spread a subject across days for a class.
- *     S2  Balance a teacher's load across the week.
+ *     S1  Spread a subject's sessions across days for a class.
+ *     S2  Balance a teacher's load (hours) across the week.
  *     S3  Avoid empty periods stuck between two classes (middle gaps).
  *
  * Algorithm
  * ---------
- * 1. EXPAND   — each classSubject row becomes individual jobs.
- *               A theory subject needing 4 hrs -> 4 jobs of length 1.
- *               A lab needing 4 hrs -> 2 jobs of length 2.
- * 2. ORDER    — hardest first: labs before theory (longer = harder),
+ * 1. EXPAND   — each classSubject row becomes session jobs whose
+ *               lengths sum to the required hours (see session model).
+ * 2. ORDER    — hardest first: longer sessions before shorter ones,
  *               then fewest eligible teachers, then most hours.
  *               Placing constrained jobs early leaves easy jobs to fill
  *               the gaps — the classic "fail-first" heuristic.
@@ -59,8 +73,27 @@ import {
   SolveResult,
   SubjectData,
   TeacherData,
+  sessionHoursOf,
   unavailableKey,
 } from "./types.js";
+
+/**
+ * Split weekly hours into session lengths: full sessions of
+ * `sessionHours`, plus one shorter remainder session when hours do not
+ * divide evenly. Examples: (4,2)->[2,2], (3,2)->[2,1], (3,3)->[3],
+ * (2,2)->[2], (5,2)->[2,2,1], (6,3)->[3,3].
+ */
+export function splitSessions(hours: number, sessionHours: number): number[] {
+  if (hours <= 0 || sessionHours <= 0) return [];
+  const out: number[] = [];
+  let remaining = hours;
+  while (remaining >= sessionHours) {
+    out.push(sessionHours);
+    remaining -= sessionHours;
+  }
+  if (remaining > 0) out.push(remaining);
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Step 1 + 2: expand hours into jobs, ordered hardest-first
@@ -78,28 +111,16 @@ export function expandJobs(
     const eligible = [...teachers.values()]
       .filter((t) => t.subjects.has(cs.subjectId))
       .map((t) => t.id);
-    const hours = cs.hours;
-    if (subject.type === "lab") {
-      // H8: labs move in 2-period blocks. An odd hour leaves one
-      // single-period job which the caller should treat as a data
-      // error (the validation report flags it); we still expand it
-      // as a 1-period job so nothing is silently dropped.
-      const blocks = Math.floor(hours / 2);
-      for (let i = 0; i < blocks; i++) {
-        raw.push({ classId: cs.classId, subjectId: cs.subjectId, duration: 2, eligibleTeachers: eligible });
-      }
-      if (hours % 2 === 1) {
-        raw.push({ classId: cs.classId, subjectId: cs.subjectId, duration: 1, eligibleTeachers: eligible });
-      }
-    } else {
-      for (let i = 0; i < hours; i++) {
-        raw.push({ classId: cs.classId, subjectId: cs.subjectId, duration: 1, eligibleTeachers: eligible });
-      }
+    // Session splitting: weekly hours -> blocks of the subject's
+    // session length (+ one shorter remainder session, if any).
+    for (const duration of splitSessions(cs.hours, sessionHoursOf(subject))) {
+      raw.push({ classId: cs.classId, subjectId: cs.subjectId, duration, eligibleTeachers: eligible });
     }
   }
 
   // Hardest first (fail-first):
-  //   1. longer duration first (labs before theory)
+  //   1. longer sessions first (3h labs, then 2h blocks, then 1h) —
+  //      long blocks have the fewest legal starts, so they go early
   //   2. fewer eligible teachers first (most constrained)
   //   3. subject with the most total hours first
   const hoursBySubject = new Map<string, number>();
@@ -181,10 +202,12 @@ export class Solver {
     const end = start + job.duration - 1;
 
     if (end > this.periods) return "outside the day";
-    // H8: a 2-period block must not span lunch (e.g. P4+P5 when
-    // lunch sits after P4 are not truly consecutive).
-    if (job.duration === 2 && this.lunchAfter !== null && start <= this.lunchAfter && this.lunchAfter < start + job.duration) {
-      return "lab would span the lunch break";
+    // Segment rule (H8 for labs, and for every session): a block must
+    // sit entirely in the morning segment or the afternoon segment —
+    // it must not span lunch (e.g. P4+P5 when lunch sits after P4 are
+    // not truly consecutive; a 3h block may only start at P1/P2 or P5).
+    if (this.lunchAfter !== null && start <= this.lunchAfter && this.lunchAfter < end) {
+      return "session would span the lunch break";
     }
     // H4: weekly cap (checked once, it covers every period equally)
     if ((this.teacherWeek.get(teacherId) ?? 0) + job.duration > teacher.weeklyHours) {
@@ -299,13 +322,21 @@ export class Solver {
     return false;
   }
 
+  /** Longest block that can fit in any single segment of the day. */
+  private maxSegmentLength(): number {
+    if (this.lunchAfter === null) return this.periods;
+    return Math.max(this.lunchAfter, this.periods - this.lunchAfter);
+  }
+
   private reasonFor(job: Job): string {
     if (job.eligibleTeachers.length === 0) {
       return "no teacher is eligible for this subject (H6)";
     }
-    const subject = this.subjects.get(job.subjectId);
-    if (subject?.type === "lab" && this.periods < 2) {
-      return "lab needs 2 consecutive periods but the day is shorter";
+    if (job.duration > this.maxSegmentLength()) {
+      return (
+        `a ${job.duration}h session cannot fit in any morning/afternoon segment ` +
+        `(longest segment is ${this.maxSegmentLength()}h) — reduce the subject's session length`
+      );
     }
     const caps = job.eligibleTeachers.reduce(
       (sum, t) => sum + (this.teachers.get(t)?.weeklyHours ?? 0),
@@ -334,7 +365,7 @@ export class Solver {
         reason: this.reasonFor(j),
       }));
 
-    // Flatten placements to single-period rows (labs -> 2 rows).
+    // Flatten placements to hourly rows (a session -> `duration` rows).
     const entries = placements.flatMap((p) =>
       Array.from({ length: p.job.duration }, (_, offset) => ({
         classId: p.job.classId,

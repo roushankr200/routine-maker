@@ -17,7 +17,7 @@ import {
   TeacherUnavailable,
 } from "./models.js";
 
-/** Replace ALL data with the MCA demo dataset (same data as the tests use). */
+/** Replace ALL data with the NITA CSE MCA dataset (same data as the tests use). */
 export async function loadDemoData(): Promise<{ teachers: number; subjects: number; classes: number }> {
   await Promise.all([
     RoutineEntry.deleteMany({}),
@@ -34,21 +34,27 @@ export async function loadDemoData(): Promise<{ teachers: number; subjects: numb
       days: DEMO_CONFIG.days,
       periodsPerDay: DEMO_CONFIG.periodsPerDay,
       lunchAfter: DEMO_CONFIG.lunchAfter,
-      periodDuration: DEMO_PERIOD_DURATION,
+      periodDuration: DEMO_CONFIG.periodDuration ?? DEMO_PERIOD_DURATION,
+      startTime: DEMO_CONFIG.startTime ?? "09:00",
+      session: DEMO_CONFIG.session ?? "ODD 2026",
+      effectiveFrom: DEMO_CONFIG.effectiveFrom ?? "27/07/2026",
+      department: DEMO_CONFIG.department ?? "Computer Science and Engineering",
+      departmentShort: DEMO_CONFIG.departmentShort ?? "CSE",
     },
     { upsert: true },
   );
 
   const codeToId = new Map<string, string>();
-  for (const [name, code, type] of DEMO_SUBJECTS) {
-    const doc = await Subject.create({ name, code, type });
+  for (const [name, code, type, sessionHours] of DEMO_SUBJECTS) {
+    const doc = await Subject.create({ name, code, type, sessionHours });
     codeToId.set(code, doc._id.toString());
   }
 
   const nameToId = new Map<string, string>();
-  for (const [name, designation, maxPerDay, weeklyHours, codes] of DEMO_TEACHERS) {
+  for (const [name, code, designation, maxPerDay, weeklyHours, codes] of DEMO_TEACHERS) {
     const doc = await Teacher.create({
       name,
+      code,
       designation,
       maxPerDay,
       weeklyHours,

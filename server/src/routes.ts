@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   ClassSection,
   ClassSubject,
+  Config,
   RoutineEntry,
   Subject,
   Teacher,
@@ -14,16 +15,23 @@ import {
   classSchema,
   classSubjectSchema,
   configSchema,
+  departmentSetupSchema,
   moveSchema,
   subjectSchema,
   swapSchema,
   teacherSchema,
 } from "./schemas.js";
-import { loadSolverData, validateData } from "./data.js";
+import { loadSolverData, validateData, SolverDataset } from "./data.js";
+import {
+  SubjectData,
+  TeacherData,
+  defaultSessionHours,
+  unavailableKey,
+} from "./solver/types.js";
 import { solve } from "./solver/solver.js";
 import { loadDemoData } from "./seed.js";
 import { classLabel } from "./demoData.js";
-import { checkPlacement, EntryLike } from "./routineCheck.js";
+import { checkBlockPlacement, EntryLike, sessionBlock } from "./routineCheck.js";
 
 export const router = Router();
 
@@ -68,8 +76,251 @@ router.post(
   wrap(async (_req, res) => {
     const counts = await loadDemoData();
     res.json({
-      message: `MCA demo data loaded: ${counts.teachers} teachers, ${counts.subjects} subjects, ${counts.classes} classes. Now click Generate Routine.`,
+      message: `NITA CSE MCA data loaded: ${counts.teachers} teachers, ${counts.subjects} subjects, ${counts.classes} classes. Now click Generate Routine.`,
       counts,
+    });
+  }),
+);
+
+// ------------------------------------------------- new department wizard
+/**
+ * POST /api/setup/department — the wizard's single commit endpoint.
+ *
+ * The whole payload is validated FIRST (Zod shape, then cross-reference
+ * and duplicate checks, then the same pre-flight validation the
+ * Validation page uses). Only when everything checks out is the
+ * current workspace wiped and replaced — a bad payload changes nothing.
+ * The institute (NIT Agartala) and the time grid are product constants:
+ * the grid fields of Config are left untouched; only the department
+ * identity + session header come from the wizard.
+ */
+router.post(
+  "/setup/department",
+  wrap(async (req, res) => {
+    const raw = parse(departmentSetupSchema, req.body, res);
+    if (!raw) return;
+
+    // Normalise Zod defaults into concrete locals (the wizard always
+    // sends every field; defaults only guard partial API callers).
+    const body = {
+      department: {
+        name: raw.department.name,
+        short: raw.department.short,
+        session: raw.department.session ?? "ODD 2026",
+        effectiveFrom: raw.department.effectiveFrom ?? "",
+      },
+      classes: raw.classes.map((c) => ({ ...c, section: c.section ?? "" })),
+      subjects: raw.subjects,
+      teachers: raw.teachers.map((t) => ({
+        ...t,
+        code: t.code ?? "",
+        designation: t.designation ?? "",
+        subjects: t.subjects ?? [],
+        unavailableDay: t.unavailableDay ?? null,
+      })),
+      classSubjects: raw.classSubjects ?? [],
+    };
+
+    const problems: string[] = [];
+
+    // -- duplicate + cross-reference checks (payload-internal) --------
+    const subjectCodes = new Map<string, number>(); // upper-cased code -> index
+    body.subjects.forEach((s, i) => {
+      const key = s.code.toUpperCase();
+      if (subjectCodes.has(key)) problems.push(`Duplicate course code "${s.code}" (Step 3).`);
+      else subjectCodes.set(key, i);
+    });
+    const classKeys = new Set<string>();
+    body.classes.forEach((c) => {
+      const key = `${c.program}|${c.year}|${c.section}`.toLowerCase();
+      if (classKeys.has(key))
+        problems.push(`Duplicate class "${classLabel(c.program, c.year, c.section)}" (Step 2).`);
+      classKeys.add(key);
+    });
+    const teacherCodes = new Map<string, string>(); // upper-cased code -> name
+    body.teachers.forEach((t) => {
+      if (t.code) {
+        const key = t.code.toUpperCase();
+        if (teacherCodes.has(key))
+          problems.push(
+            `Faculty code "${t.code}" is used by both ${teacherCodes.get(key)} and ${t.name} (Step 4).`,
+          );
+        else teacherCodes.set(key, t.name);
+      }
+      for (const code of t.subjects) {
+        if (!subjectCodes.has(code.toUpperCase()))
+          problems.push(`Teacher ${t.name} can teach "${code}", which is not one of the Step 3 courses.`);
+      }
+    });
+    const mappingSeen = new Set<string>();
+    for (const m of body.classSubjects) {
+      if (m.classIndex >= body.classes.length) {
+        problems.push(`Mapping refers to class #${m.classIndex + 1}, which does not exist.`);
+        continue;
+      }
+      if (!subjectCodes.has(m.subjectCode.toUpperCase())) {
+        problems.push(`Mapping refers to course "${m.subjectCode}", which is not one of the Step 3 courses.`);
+        continue;
+      }
+      const key = `${m.classIndex}|${m.subjectCode.toUpperCase()}`;
+      if (mappingSeen.has(key)) problems.push(`Duplicate mapping entry for course "${m.subjectCode}".`);
+      mappingSeen.add(key);
+    }
+    if (problems.length) {
+      return void res.status(400).json({ error: "Department setup has problems", problems });
+    }
+
+    // -- pre-flight validation on a synthetic dataset (nothing wiped) -
+    const cfg = await getOrCreateConfig();
+    const synthTeachers = new Map<string, TeacherData>();
+    body.teachers.forEach((t, i) => {
+      const id = `t${i}`;
+      synthTeachers.set(id, {
+        id,
+        name: t.name,
+        maxPerDay: t.maxPerDay,
+        weeklyHours: t.weeklyHours,
+        subjects: new Set(t.subjects.map((c) => `s${subjectCodes.get(c.toUpperCase())}`)),
+        unavailable: t.unavailableDay
+          ? new Set([unavailableKey(t.unavailableDay, null)])
+          : new Set<string>(),
+      });
+    });
+    const synthSubjects = new Map<string, SubjectData>();
+    body.subjects.forEach((s, i) => {
+      const id = `s${i}`;
+      synthSubjects.set(id, {
+        id,
+        name: s.name,
+        code: s.code,
+        type: s.type,
+        sessionHours: s.sessionHours ?? defaultSessionHours(s.type),
+      });
+    });
+    const synthDataset: SolverDataset = {
+      teachers: synthTeachers,
+      subjects: synthSubjects,
+      classSubjects: body.classSubjects
+        .filter((m) => m.hours > 0)
+        .map((m) => ({
+          classId: `c${m.classIndex}`,
+          subjectId: `s${subjectCodes.get(m.subjectCode.toUpperCase())}`,
+          hours: m.hours,
+        })),
+      config: {
+        days: cfg.days,
+        periodsPerDay: cfg.periodsPerDay,
+        lunchAfter: cfg.lunchAfter ?? null,
+        periodDuration: cfg.periodDuration,
+        startTime: cfg.startTime,
+        session: body.department.session,
+        effectiveFrom: body.department.effectiveFrom,
+        department: body.department.name,
+        departmentShort: body.department.short,
+      },
+      classNames: new Map(
+        body.classes.map((c, i) => [`c${i}`, classLabel(c.program, c.year, c.section)]),
+      ),
+    };
+    const report = validateData(synthDataset);
+
+    // -- wipe + replace (single active department model) --------------
+    await Promise.all([
+      RoutineEntry.deleteMany({}),
+      TeacherUnavailable.deleteMany({}),
+      ClassSubject.deleteMany({}),
+      Teacher.deleteMany({}),
+      Subject.deleteMany({}),
+      ClassSection.deleteMany({}),
+    ]);
+
+    await Config.findOneAndUpdate(
+      {},
+      {
+        department: body.department.name,
+        departmentShort: body.department.short,
+        session: body.department.session,
+        effectiveFrom: body.department.effectiveFrom,
+      },
+      { upsert: true },
+    );
+
+    const subjectIdByCode = new Map<string, string>();
+    for (const s of body.subjects) {
+      const doc = await Subject.create({
+        name: s.name,
+        code: s.code,
+        type: s.type,
+        sessionHours: s.sessionHours ?? defaultSessionHours(s.type),
+      });
+      subjectIdByCode.set(s.code.toUpperCase(), doc._id.toString());
+    }
+
+    const classIds: string[] = [];
+    for (const c of body.classes) {
+      const doc = await ClassSection.create({
+        program: c.program,
+        year: c.year,
+        section: c.section,
+      });
+      classIds.push(doc._id.toString());
+    }
+
+    for (const t of body.teachers) {
+      const doc = await Teacher.create({
+        name: t.name,
+        code: t.code,
+        designation: t.designation,
+        maxPerDay: t.maxPerDay,
+        weeklyHours: t.weeklyHours,
+        subjects: t.subjects.map((code) => subjectIdByCode.get(code.toUpperCase())),
+      });
+      if (t.unavailableDay) {
+        await TeacherUnavailable.create({
+          teacherId: doc._id,
+          day: t.unavailableDay,
+          period: null,
+        });
+      }
+    }
+
+    let mappings = 0;
+    for (const m of body.classSubjects) {
+      if (m.hours <= 0) continue;
+      await ClassSubject.create({
+        classId: classIds[m.classIndex],
+        subjectId: subjectIdByCode.get(m.subjectCode.toUpperCase()),
+        hours: m.hours,
+      });
+      mappings++;
+    }
+
+    res.status(201).json({
+      message:
+        `${body.department.short} department set up: ${body.classes.length} classes, ` +
+        `${body.subjects.length} courses, ${body.teachers.length} teachers, ${mappings} class-course mappings. ` +
+        `Now click Generate Routine.`,
+      counts: {
+        teachers: body.teachers.length,
+        subjects: body.subjects.length,
+        classes: body.classes.length,
+        classSubjects: mappings,
+      },
+      validation: {
+        issues: report.issues,
+        warnings: report.warnings,
+        slotsPerWeek: report.slotsPerWeek,
+        demandBySubject: report.demandBySubject.map((d) => ({
+          subject: `${d.subject.code} — ${d.subject.name}`,
+          demand: d.demand,
+          capacity: d.capacity,
+          teachers: d.teachers,
+        })),
+        demandByClass: report.demandByClass.map((d) => ({
+          className: d.className,
+          total: d.total,
+        })),
+      },
     });
   }),
 );
@@ -159,12 +410,20 @@ router.get(
   }),
 );
 
+/** Fill the session-length default (theory 2h, lab 3h) when omitted. */
+function subjectBody(body: { type: "theory" | "lab"; sessionHours?: number }) {
+  return {
+    ...body,
+    sessionHours: body.sessionHours ?? (body.type === "lab" ? 3 : 2),
+  };
+}
+
 router.post(
   "/subjects",
   wrap(async (req, res) => {
     const body = parse(subjectSchema, req.body, res);
     if (!body) return;
-    const doc = await Subject.create(body);
+    const doc = await Subject.create(subjectBody(body));
     res.status(201).json({ id: doc._id.toString(), message: "Subject saved." });
   }),
 );
@@ -174,7 +433,7 @@ router.put(
   wrap(async (req, res) => {
     const body = parse(subjectSchema, req.body, res);
     if (!body) return;
-    const doc = await Subject.findByIdAndUpdate(req.params.id, body, { new: true });
+    const doc = await Subject.findByIdAndUpdate(req.params.id, subjectBody(body), { new: true });
     if (!doc) return void res.status(404).json({ error: "Subject not found." });
     res.json({ id: doc._id.toString(), message: "Subject saved." });
   }),
@@ -213,6 +472,7 @@ router.get(
               name: s?.name ?? "?",
               code: s?.code ?? "?",
               type: s?.type ?? "theory",
+              sessionHours: s?.sessionHours ?? (s?.type === "lab" ? 3 : 2),
             };
           })
           .sort((a, b) => a.code.localeCompare(b.code));
@@ -293,6 +553,11 @@ router.get(
       periodsPerDay: cfg.periodsPerDay,
       lunchAfter: cfg.lunchAfter,
       periodDuration: cfg.periodDuration,
+      startTime: cfg.startTime,
+      session: cfg.session,
+      effectiveFrom: cfg.effectiveFrom,
+      department: cfg.department,
+      departmentShort: cfg.departmentShort,
     });
   }),
 );
@@ -307,6 +572,11 @@ router.put(
     cfg.periodsPerDay = body.periodsPerDay ?? cfg.periodsPerDay;
     cfg.lunchAfter = !body.lunchAfter ? null : body.lunchAfter;
     cfg.periodDuration = body.periodDuration ?? cfg.periodDuration;
+    cfg.startTime = body.startTime ?? cfg.startTime;
+    cfg.session = body.session ?? cfg.session;
+    cfg.effectiveFrom = body.effectiveFrom ?? cfg.effectiveFrom;
+    cfg.department = body.department ?? cfg.department;
+    cfg.departmentShort = body.departmentShort ?? cfg.departmentShort;
     await cfg.save();
     await RoutineEntry.deleteMany({}); // grid changed -> routine invalid
     res.json({ message: "Time structure saved. Existing routine was cleared (grid changed)." });
@@ -338,7 +608,9 @@ async function populatedEntries() {
       subjectName: s?.name ?? "?",
       subjectCode: s?.code ?? "?",
       subjectType: s?.type ?? "theory",
+      sessionHours: s?.sessionHours ?? (s?.type === "lab" ? 3 : 2),
       teacherName: t?.name ?? "?",
+      teacherCode: t?.code ?? "",
       className: c ? classLabel(c.program, c.year, c.section) : "?",
     };
   });
@@ -423,8 +695,8 @@ router.post(
         reason: u.reason,
       })),
       message: result.success
-        ? `Routine generated: ${result.entries.length}/${totalPeriods} periods placed (${result.placements.length}/${result.totalJobs} jobs) in ${result.elapsedSeconds.toFixed(2)}s, search nodes ${result.nodes}. Zero hard-rule violations.`
-        : `Partial routine: ${result.entries.length}/${totalPeriods} periods placed. Some jobs could not be placed — see unplaced list.`,
+        ? `Routine generated: ${result.entries.length}/${totalPeriods} hours placed (${result.placements.length}/${result.totalJobs} sessions) in ${result.elapsedSeconds.toFixed(2)}s, search nodes ${result.nodes}. Zero hard-rule violations.`
+        : `Partial routine: ${result.entries.length}/${totalPeriods} hours placed. Some sessions could not be placed — see unplaced list.`,
     });
   }),
 );
@@ -457,11 +729,28 @@ router.post(
     const [entries, data] = await Promise.all([entriesAsLikes(), loadSolverData()]);
     const entry = entries.find((e) => e.id === body.entryId);
     if (!entry) return void res.status(404).json({ error: "Entry not found." });
-    const candidate: EntryLike = { ...entry, day: body.day, period: body.period };
-    const reason = checkPlacement(entries, candidate, data.teachers, data.subjects);
+    // A move moves the WHOLE session block the entry belongs to;
+    // body.period is the block's new start. The full span is checked.
+    const block = sessionBlock(entries, entry.id);
+    const blockIds = new Set(block.map((e) => e.id));
+    const others = entries.filter((e) => !blockIds.has(e.id));
+    const first = block[0];
+    const reason = checkBlockPlacement(
+      others,
+      { classId: first.classId, subjectId: first.subjectId, teacherId: first.teacherId, length: block.length },
+      body.day,
+      body.period,
+      data.teachers,
+      data.subjects,
+      { periodsPerDay: data.config.periodsPerDay, lunchAfter: data.config.lunchAfter },
+    );
     if (reason) return void res.status(409).json({ error: `Move rejected: ${reason}` });
-    await RoutineEntry.findByIdAndUpdate(entry.id, { day: body.day, period: body.period });
-    res.json({ message: "Move applied — no rule broken." });
+    for (let i = 0; i < block.length; i++) {
+      await RoutineEntry.findByIdAndUpdate(block[i].id, { day: body.day, period: body.period + i });
+    }
+    res.json({
+      message: `Move applied — the whole ${block.length}h session moved, no rule broken.`,
+    });
   }),
 );
 
@@ -477,22 +766,46 @@ router.post(
     if (a.classId !== b.classId) {
       return void res
         .status(409)
-        .json({ error: "Swap rejected: swap is supported within the same class (use Move for single entries)." });
+        .json({ error: "Swap rejected: swap is supported within the same class (use Move for single sessions)." });
     }
-    // Simulate the swap in memory, validate both entries in their new slots.
-    const swapped: EntryLike[] = entries.map((e) => {
-      if (e.id === a.id) return { ...e, day: b.day, period: b.period };
-      if (e.id === b.id) return { ...e, day: a.day, period: a.period };
-      return e;
+    // Swap exchanges the two SESSION BLOCKS the picked entries belong
+    // to: block A takes block B's start and vice versa. Both full spans
+    // are validated in their new positions before anything is written.
+    const blockA = sessionBlock(entries, a.id);
+    const blockB = sessionBlock(entries, b.id);
+    const idsA = new Set(blockA.map((e) => e.id));
+    const idsB = new Set(blockB.map((e) => e.id));
+    if ([...idsA].some((id) => idsB.has(id))) {
+      return void res.status(409).json({ error: "Swap rejected: both picks are in the same session." });
+    }
+    const grid = { periodsPerDay: data.config.periodsPerDay, lunchAfter: data.config.lunchAfter };
+    const startA = { day: blockA[0].day, period: blockA[0].period };
+    const startB = { day: blockB[0].day, period: blockB[0].period };
+    const rest = entries.filter((e) => !idsA.has(e.id) && !idsB.has(e.id));
+    const movedA: EntryLike[] = blockA.map((e, i) => ({ ...e, day: startB.day, period: startB.period + i }));
+    const movedB: EntryLike[] = blockB.map((e, i) => ({ ...e, day: startA.day, period: startA.period + i }));
+    const info = (blk: EntryLike[]) => ({
+      classId: blk[0].classId,
+      subjectId: blk[0].subjectId,
+      teacherId: blk[0].teacherId,
+      length: blk.length,
     });
-    const newA = swapped.find((e) => e.id === a.id)!;
-    const newB = swapped.find((e) => e.id === b.id)!;
-    const r1 = checkPlacement(swapped, newA, data.teachers, data.subjects);
-    const r2 = r1 ? null : checkPlacement(swapped, newB, data.teachers, data.subjects);
+    const r1 = checkBlockPlacement(
+      [...rest, ...movedB], info(blockA), startB.day, startB.period, data.teachers, data.subjects, grid,
+    );
+    const r2 = r1
+      ? null
+      : checkBlockPlacement(
+          [...rest, ...movedA], info(blockB), startA.day, startA.period, data.teachers, data.subjects, grid,
+        );
     if (r1 || r2) return void res.status(409).json({ error: `Swap rejected: ${r1 ?? r2}` });
-    await RoutineEntry.findByIdAndUpdate(a.id, { day: b.day, period: b.period });
-    await RoutineEntry.findByIdAndUpdate(b.id, { day: a.day, period: a.period });
-    res.json({ message: "Swap applied — no rule broken." });
+    for (let i = 0; i < blockA.length; i++) {
+      await RoutineEntry.findByIdAndUpdate(blockA[i].id, { day: startB.day, period: startB.period + i });
+    }
+    for (let i = 0; i < blockB.length; i++) {
+      await RoutineEntry.findByIdAndUpdate(blockB[i].id, { day: startA.day, period: startA.period + i });
+    }
+    res.json({ message: "Swap applied — both sessions moved as whole blocks, no rule broken." });
   }),
 );
 

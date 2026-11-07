@@ -9,11 +9,14 @@ import mongoose, { HydratedDocument, Schema, Types } from "mongoose";
  *   ClassSubject    (was: class_subject — hours per class per subject)
  *   TeacherUnavailable (was: teacher_unavailable; period null = full day)
  *   Config          (was: config — single document, _id "singleton")
- *   RoutineEntry    (was: routine_entry — one row per single period)
+ *   RoutineEntry    (was: routine_entry — one row per hourly slot;
+ *                    a session occupies several consecutive rows)
  */
 
 export interface ITeacher {
   name: string;
+  /** Short faculty code as printed on the master sheet, e.g. "DJB". */
+  code: string;
   designation: string;
   maxPerDay: number;
   weeklyHours: number;
@@ -22,6 +25,7 @@ export interface ITeacher {
 }
 const teacherSchema = new Schema<ITeacher>({
   name: { type: String, required: true },
+  code: { type: String, default: "" },
   designation: { type: String, default: "" },
   maxPerDay: { type: Number, required: true, default: 4 },
   weeklyHours: { type: Number, required: true, default: 16 },
@@ -33,11 +37,22 @@ export interface ISubject {
   name: string;
   code: string;
   type: "theory" | "lab";
+  /**
+   * Length (hours) of one session on the hourly grid: theory 1–2
+   * (default 2), lab 2–3 (default 3) — the real NITA sheet's blocks.
+   */
+  sessionHours: number;
 }
 const subjectSchema = new Schema<ISubject>({
   name: { type: String, required: true },
   code: { type: String, required: true },
   type: { type: String, enum: ["theory", "lab"], required: true },
+  sessionHours: {
+    type: Number,
+    default: function (this: ISubject) {
+      return this.type === "lab" ? 3 : 2;
+    },
+  },
 });
 export const Subject = mongoose.model<ISubject>("Subject", subjectSchema);
 
@@ -87,12 +102,34 @@ export interface IConfig {
   periodsPerDay: number;
   lunchAfter: number | null;
   periodDuration: number;
+  /** Day start "HH:MM" (24h) — period clock times are derived from it. */
+  startTime: string;
+  /** Session label printed on the master sheet, e.g. "ODD 2026". */
+  session: string;
+  /** "w.e.f." date text printed on the master sheet, e.g. "27/07/2026". */
+  effectiveFrom: string;
+  /**
+   * The department using the product. The INSTITUTE is a product
+   * constant (NIT Agartala — never a config field); only the
+   * department varies per user of the product.
+   */
+  department: string;
+  /** Short department name for the masthead, e.g. "CSE". */
+  departmentShort: string;
 }
 const configSchema = new Schema<IConfig>({
-  days: { type: [String], default: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] },
+  // NITA pattern (real CSE master routine, ODD 2026): Mon–Fri, hourly
+  // grid of 7 slots, 9:00 start, lunch 1:00–2:00 after P4. Sessions are
+  // blocks merged across hours (theory 1–2h, labs 2–3h).
+  days: { type: [String], default: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] },
   periodsPerDay: { type: Number, default: 7 },
   lunchAfter: { type: Number, default: 4 },
-  periodDuration: { type: Number, default: 50 },
+  periodDuration: { type: Number, default: 60 },
+  startTime: { type: String, default: "09:00" },
+  session: { type: String, default: "ODD 2026" },
+  effectiveFrom: { type: String, default: "27/07/2026" },
+  department: { type: String, default: "Computer Science and Engineering" },
+  departmentShort: { type: String, default: "CSE" },
 });
 export const Config = mongoose.model<IConfig>("Config", configSchema);
 

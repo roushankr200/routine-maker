@@ -2,12 +2,14 @@ import axios from "axios";
 import type {
   ClassSection,
   DashboardData,
+  DepartmentSetupResult,
   GenerateResult,
   RoutineEntry,
   ScheduleConfig,
   Subject,
   Teacher,
   ValidationData,
+  WizardPayload,
 } from "./types";
 
 export const api = axios.create({ baseURL: "/api" });
@@ -56,8 +58,11 @@ export const deleteClassSubject = (classId: string, subjectId: string) =>
 
 // Config
 export const fetchConfig = () => api.get<ScheduleConfig>("/config").then((r) => r.data);
-export const saveConfig = (cfg: ScheduleConfig & { periodDuration: number }) =>
-  api.put("/config", cfg);
+export const saveConfig = (cfg: ScheduleConfig) => api.put("/config", cfg);
+
+// New Department wizard — one call replaces the workspace department.
+export const setupDepartment = (payload: WizardPayload) =>
+  api.post<DepartmentSetupResult>("/setup/department", payload).then((r) => r.data);
 
 // Routine
 export const fetchRoutine = () =>

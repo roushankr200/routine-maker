@@ -57,7 +57,13 @@ export async function loadSolverData(): Promise<SolverDataset> {
   const subjects = new Map<string, SubjectData>();
   for (const s of subjectDocs) {
     const id = s._id.toString();
-    subjects.set(id, { id, name: s.name, code: s.code, type: s.type });
+    subjects.set(id, {
+      id,
+      name: s.name,
+      code: s.code,
+      type: s.type,
+      sessionHours: s.sessionHours ?? (s.type === "lab" ? 3 : 2),
+    });
   }
 
   const classSubjects: ClassSubjectData[] = csDocs.map((cs) => ({
@@ -75,6 +81,12 @@ export async function loadSolverData(): Promise<SolverDataset> {
     days: cfg.days,
     periodsPerDay: cfg.periodsPerDay,
     lunchAfter: cfg.lunchAfter ?? null,
+    periodDuration: cfg.periodDuration,
+    startTime: cfg.startTime,
+    session: cfg.session,
+    effectiveFrom: cfg.effectiveFrom,
+    department: cfg.department,
+    departmentShort: cfg.departmentShort,
   };
   return { teachers, subjects, classSubjects, config, classNames };
 }
@@ -107,10 +119,23 @@ export function validateData(data: SolverDataset): {
     demandMap.set(cs.subjectId, (demandMap.get(cs.subjectId) ?? 0) + cs.hours);
     classDemandMap.set(cs.classId, (classDemandMap.get(cs.classId) ?? 0) + cs.hours);
     const subject = subjects.get(cs.subjectId);
-    if (subject?.type === "lab" && cs.hours % 2 === 1) {
-      issues.push(
-        `${subject.name}: lab hours must be even (2-period blocks), got ${cs.hours} for one class.`,
-      );
+    if (subject) {
+      const sh = subject.sessionHours;
+      const rem = cs.hours % sh;
+      if (rem !== 0) {
+        warnings.push(
+          `${subject.name}: ${cs.hours}h/week at ${sh}h per session leaves one shorter ${rem}h session for one class.`,
+        );
+      }
+      const longestSegment =
+        config.lunchAfter === null
+          ? config.periodsPerDay
+          : Math.max(config.lunchAfter, config.periodsPerDay - config.lunchAfter);
+      if (sh > longestSegment) {
+        issues.push(
+          `${subject.name}: a ${sh}h session cannot fit in any morning/afternoon segment (longest is ${longestSegment}h).`,
+        );
+      }
     }
   }
 

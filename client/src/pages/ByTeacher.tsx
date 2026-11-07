@@ -52,7 +52,7 @@ export default function ByTeacher() {
             <span className="font-mono font-semibold text-ink">
               {mine.length} / {teacher.weeklyHours}
             </span>{" "}
-            periods · max/day {teacher.maxPerDay}
+            hours · max/day {teacher.maxPerDay}h
           </p>
         )}
       </div>

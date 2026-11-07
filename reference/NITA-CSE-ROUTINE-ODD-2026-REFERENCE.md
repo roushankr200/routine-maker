@@ -4,11 +4,18 @@ Source file: `~/workspace/user/files/intermediate__CSEMaster.TheoryLab.Routine.O
 (CSE DEPARTMENT CLASS ROUTINE (NITA), ODD 2026, w.e.f 27/07/2026)
 Use: this is the real-world format the Routine Maker must be able to represent and generate.
 
-## 1. Time grid
+## 1. Time grid and session blocks (verified visually on the sheet, MON/TUE tables)
 
-- Days: Monday–Friday
-- Periods: 9:00–10:00, 10:00–11:00, 11:00–12:00, 12:00–1:00 | Lunch 1:00–2:00 | 2:00–3:00, 3:00–4:00, 4:00–5:00
-- 7 teaching periods/day. Labs occupy a single 3-hour block (morning 9–12 pattern or, more often, the full afternoon block 2:00–5:00).
+- Days: Monday–Friday. The grid columns are HOURLY: 9–10, 10–11, 11–12, 12–1 | Lunch 1–2 | 2–3, 3–4, 4–5 — 7 hourly slots/day.
+- Entries MERGE across hours: a session is a BLOCK of consecutive hours, never a single fixed period. There is no "60-minute class" unit on this sheet — the hour is only the grid unit.
+- THEORY sessions: 1 hour OR 2 consecutive hours — 2h is very common:
+  - `DMS - 3A - AH - 210` Mon 9:00–11:00 (2h) · `EM3 - 3A` Mon 11:00–1:00 (2h) · `WT - 1MCA - AS - 119` Tue 9:00–11:00 (2h)
+  - 1h singles exist too: `SEMINAR` 10–11 · `NM` 11–12 · `E-Comm` 12–1
+- LAB sessions: 2 or 3 consecutive hours:
+  - 3h blocks anchored in the morning 9–12 (Tue: DSPM Lab + DCLD Lab run in parallel for the 3A groups) or, more often, the full afternoon block 2:00–5:00 (Mon: DBMS Lab 5A1 + OS Lab 5A2; 3rd-sem-A labs 2–5)
+  - 2h labs exist: Mon `WT Lab` + `DFS Lab` (1MCA) 11:00–1:00 · Tue `AI Lab` (5MCA) 11:00–1:00
+- No session ever crosses the lunch break: blocks sit inside the morning segment (9–1) or the afternoon segment (2–5). A 3h block can therefore only start at 9:00, 10:00 or 2:00.
+- Modelling consequence (implemented in the solver): every subject has a session length — `sessionHours`: theory 1|2 (default 2), lab 2|3 (default 3) — and a class's weekly hours split into sessions of that length plus one shorter remainder session when they don't divide evenly (theory 3h @2 → 2h + 1h).
 
 ## 2. Entry notation (grammar of one cell)
 

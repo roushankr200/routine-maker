@@ -40,7 +40,7 @@ export default function Validation() {
           <thead>
             <tr className="border-b-2 border-primary/60">
               <th className="th">Subject</th>
-              <th className="th">Demand (periods/wk)</th>
+              <th className="th">Demand (hours/wk)</th>
               <th className="th">Eligible teachers</th>
               <th className="th">Combined capacity</th>
               <th className="th">Placed now</th>
@@ -68,7 +68,7 @@ export default function Validation() {
       </div>
       <p className="mt-3 text-sm text-muted">
         The week has {data.slotsPerWeek} slots per class. Demand above capacity for any subject
-        means some periods can never be placed — add a teacher or raise a weekly cap.
+        means some hours can never be placed — add a teacher or raise a weekly cap.
       </p>
     </div>
   );
