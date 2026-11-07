@@ -1,6 +1,0 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{% block title %}Routine Maker{% endblock %}</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head>
-<body><header><a class="brand" href="{{ url_for('dashboard') }}">🗓️ Routine Maker</a>
-<nav><a href="{{ url_for('dashboard') }}">Dashboard</a><a href="{{ url_for('teachers') }}">Teachers</a><a href="{{ url_for('subjects') }}">Subjects</a><a href="{{ url_for('classes') }}">Classes</a><a href="{{ url_for('setup') }}">Setup</a><a href="{{ url_for('routine_master') }}">Master Routine</a><a href="{{ url_for('routine_teachers_index') }}">By Teacher</a><a href="{{ url_for('validation') }}">Validation</a></nav></header>
-<main>{% with msgs=get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}{% block body %}{% endblock %}</main>
-<footer>Routine Maker v1 · Python + Flask + SQLite · Custom hardest-first backtracking solver</footer></body></html>
