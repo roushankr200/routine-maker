@@ -171,19 +171,17 @@ export default function MasterRoutine() {
     onError: onErr,
   });
 
-  if (error) return <Banner kind="error" text={errorMessage(error)} />;
-  if (!data) return <p className="text-muted">Loading…</p>;
-
-  const config = data.config;
-  const periods = Array.from({ length: config.periodsPerDay }, (_, i) => i + 1);
-  const lunch = lunchRange(config);
-  const byKey = new Map(entries.map((e) => [`${e.classId}|${e.day}|${e.period}`, e]));
-
   /**
    * Body rows for one day's sheet: programme band rows (screen only)
    * interleaved with class rows in master order. Rows removed by the
    * view filters stay in the DOM with .sheet-filtered-out so printing
    * still shows the FULL sheet; bands never print (.no-print).
+   *
+   * HOOKS RULE: this useMemo MUST stay above the loading/error early
+   * returns below. It originally sat after them, so the loading render
+   * ran one hook fewer than the data render and React crashed the page
+   * with error #310 ("rendered more hooks than during the previous
+   * render") the moment the routine arrived.
    */
   type SheetRow =
     | { type: "band"; programme: string; key: string }
@@ -201,6 +199,14 @@ export default function MasterRoutine() {
     }
     return rows;
   }, [sortedClasses]);
+
+  if (error) return <Banner kind="error" text={errorMessage(error)} />;
+  if (!data) return <p className="text-muted">Loading…</p>;
+
+  const config = data.config;
+  const periods = Array.from({ length: config.periodsPerDay }, (_, i) => i + 1);
+  const lunch = lunchRange(config);
+  const byKey = new Map(entries.map((e) => [`${e.classId}|${e.day}|${e.period}`, e]));
 
   /** Render one day's sheet: rows = classes, columns = hourly slots + lunch. */
   const daySheet = (day: string) => {
