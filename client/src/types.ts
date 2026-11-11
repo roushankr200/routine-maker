@@ -33,6 +33,10 @@ export interface Subject {
   type: "theory" | "lab";
   /** Session length in hours: theory 1–2 (default 2), lab 2–3 (default 3). */
   sessionHours: number;
+  /** Syllabus credits (0 when not from a syllabus). */
+  credits: number;
+  /** Code as printed in the syllabus document, e.g. "UCS03B08" ("" if none). */
+  syllabusCode?: string;
 }
 
 export interface ClassRequirement {
@@ -42,6 +46,8 @@ export interface ClassRequirement {
   code: string;
   type: "theory" | "lab";
   sessionHours: number;
+  credits?: number;
+  syllabusCode?: string;
 }
 
 export interface ClassSection {
@@ -49,9 +55,114 @@ export interface ClassSection {
   program: string;
   year: string;
   section: string;
+  /** Programme classification for master-sheet grouping/filtering. */
+  programme: string;
+  /** Numeric semester when known (null = unknown). */
+  semesterNumber: number | null;
   name: string;
   requirements: ClassRequirement[];
   totalHours: number;
+}
+
+// ------------------------------------------------------- syllabus catalogue
+export type CatalogueKind =
+  | "theory"
+  | "lab"
+  | "elective"
+  | "seminar"
+  | "project"
+  | "viva"
+  | "other";
+
+export interface CatalogueElectiveOption {
+  syllabusCode: string | null;
+  shortCode: string;
+  title: string;
+  derived?: boolean;
+}
+
+export interface CatalogueSubject {
+  key: string;
+  syllabusCode: string | null;
+  shortCode: string;
+  title: string;
+  L: number;
+  T: number;
+  P: number;
+  credits: number;
+  kind: CatalogueKind;
+  timetabled: boolean;
+  derived?: boolean;
+  weeklyHours: number;
+  sessionHours: number;
+  electivePool?: CatalogueElectiveOption[];
+}
+
+export interface CatalogueSemester {
+  semester: number;
+  subjects?: CatalogueSubject[];
+  groups?: { I: CatalogueSubject[]; II: CatalogueSubject[] };
+}
+
+export interface CatalogueProgramme {
+  programme: string;
+  specialisation?: string;
+  semesters: CatalogueSemester[];
+}
+
+export interface CatalogueDepartment {
+  id: string;
+  name: string;
+  shortName: string;
+  programmes: CatalogueProgramme[];
+}
+
+export interface CatalogListResponse {
+  departments: Array<{
+    id: string;
+    name: string;
+    shortName: string;
+    programmes: Array<{ programme: string; specialisation?: string; semesters: number[] }>;
+  }>;
+}
+
+/** POST /api/setup/guided payload — decisions only; the server re-resolves subjects from the catalogue. */
+export interface GuidedSetupPayload {
+  catalogueId: string;
+  department: { name: string; short: string; session: string; effectiveFrom: string };
+  teachers: Array<{
+    name: string;
+    code: string;
+    designation?: string;
+    maxPerDay?: number;
+    weeklyHours: number;
+  }>;
+  classes: Array<{
+    programme: string;
+    specialisation?: string;
+    semester: number;
+    section: string;
+    group?: "I" | "II";
+    assignments: Array<{ key: string; teacherCode: string; electivePick?: string }>;
+  }>;
+}
+
+export interface GuidedSetupResult {
+  message: string;
+  departmentId: string;
+  counts: {
+    teachers: number;
+    subjects: number;
+    classes: number;
+    classSubjects: number;
+    xxSubjects: number;
+  };
+  teacherLoads: Array<{
+    code: string;
+    name: string;
+    assignedHours: number;
+    weeklyHours: number;
+  }>;
 }
 
 export interface RoutineEntry {

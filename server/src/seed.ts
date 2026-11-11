@@ -81,8 +81,16 @@ export async function loadDemoData(): Promise<{
   );
 
   const codeToId = new Map<string, string>();
-  for (const [name, code, type, sessionHours] of DEMO_SUBJECTS) {
-    const doc = await Subject.create({ ...filter, name, code, type, sessionHours });
+  for (const [name, code, type, sessionHours, credits, syllabusCode] of DEMO_SUBJECTS) {
+    const doc = await Subject.create({
+      ...filter,
+      name,
+      code,
+      type,
+      sessionHours,
+      credits,
+      syllabusCode,
+    });
     codeToId.set(code, doc._id.toString());
   }
 
@@ -101,8 +109,15 @@ export async function loadDemoData(): Promise<{
   }
 
   const classIds: string[] = [];
-  for (const [program, year, section] of DEMO_CLASSES) {
-    const doc = await ClassSection.create({ ...filter, program, year, section });
+  for (const [program, year, section, semesterNumber] of DEMO_CLASSES) {
+    const doc = await ClassSection.create({
+      ...filter,
+      program,
+      year,
+      section,
+      programme: program,
+      semesterNumber,
+    });
     classIds.push(doc._id.toString());
   }
 

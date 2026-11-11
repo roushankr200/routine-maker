@@ -2,11 +2,15 @@ import axios from "axios";
 import type {
   BalancePreviewPayload,
   BalanceReport,
+  CatalogListResponse,
+  CatalogueDepartment,
   ClassSection,
   DashboardData,
   DepartmentSetupResult,
   DepartmentsResponse,
   GenerateResult,
+  GuidedSetupPayload,
+  GuidedSetupResult,
   RoutineEntry,
   ScheduleConfig,
   Subject,
@@ -79,6 +83,14 @@ export const saveConfig = (cfg: ScheduleConfig) => api.put("/config", cfg);
 // New Department wizard — creates an ADDITIONAL department (nothing is deleted).
 export const setupDepartment = (payload: WizardPayload) =>
   api.post<DepartmentSetupResult>("/setup/department", payload).then((r) => r.data);
+
+// Syllabus catalogue + guided setup — subjects preloaded from the official syllabus.
+export const fetchCatalogList = () =>
+  api.get<CatalogListResponse>("/catalog").then((r) => r.data);
+export const fetchCatalogue = (id: string) =>
+  api.get<CatalogueDepartment>(`/catalog/${id}`).then((r) => r.data);
+export const setupGuided = (payload: GuidedSetupPayload) =>
+  api.post<GuidedSetupResult>("/setup/guided", payload).then((r) => r.data);
 
 // Routine
 export const fetchRoutine = () =>

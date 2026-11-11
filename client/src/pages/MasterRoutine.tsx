@@ -39,6 +39,48 @@ export default function MasterRoutine() {
   const [swapA, setSwapA] = useState("");
   const [swapB, setSwapB] = useState("");
 
+  // View filters (screen only — printing always shows the full sheet).
+  const [progFilter, setProgFilter] = useState<string>("All");
+  const [yearFilter, setYearFilter] = useState<number>(0); // 0 = all years
+
+  /**
+   * Classes in master-sheet order: programme (B.Tech -> M.Tech -> MCA
+   * -> other) -> semester -> section, with a programme band row before
+   * each programme's first class (screen only).
+   */
+  const programmeOrder = (p: string) =>
+    ({ "B.Tech": 0, "M.Tech": 1, MCA: 2 })[p] ?? 3;
+  const sortedClasses = useMemo(
+    () =>
+      [...classes].sort(
+        (a, b) =>
+          programmeOrder(a.programme ?? a.program) - programmeOrder(b.programme ?? b.program) ||
+          (a.semesterNumber ?? 99) - (b.semesterNumber ?? 99) ||
+          a.section.localeCompare(b.section) ||
+          a.name.localeCompare(b.name),
+      ),
+    [classes],
+  );
+  const visibleIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of sortedClasses) {
+      const prog = c.programme ?? c.program;
+      if (progFilter !== "All" && prog !== progFilter) continue;
+      if (yearFilter !== 0) {
+        if (c.semesterNumber == null || Math.ceil(c.semesterNumber / 2) !== yearFilter) continue;
+      }
+      set.add(c.id);
+    }
+    return set;
+  }, [sortedClasses, progFilter, yearFilter]);
+  const programmesPresent = useMemo(
+    () =>
+      [...new Set(sortedClasses.map((c) => c.programme ?? c.program))].sort(
+        (a, b) => programmeOrder(a) - programmeOrder(b),
+      ),
+    [sortedClasses],
+  );
+
   const entries = useMemo(() => data?.entries ?? [], [data]);
   const cellText = (e: RoutineEntry) =>
     `${sheetSubjectLabel(e.subjectCode, e.subjectType)} - ${e.teacherCode || initialsCode(e.teacherName)}`;
@@ -81,11 +123,16 @@ export default function MasterRoutine() {
     return [...used.values()].sort((a, b) => a.code.localeCompare(b.code));
   }, [entries, teachers]);
   const subjectLegend = useMemo(() => {
-    const used = new Map<string, { code: string; name: string }>();
+    const used = new Map<string, { code: string; name: string; credits: number; syllabusCode: string }>();
     for (const e of entries) {
       if (!used.has(e.subjectId)) {
         const s = subjects.find((x) => x.id === e.subjectId);
-        used.set(e.subjectId, { code: s?.code ?? e.subjectCode, name: s?.name ?? e.subjectName });
+        used.set(e.subjectId, {
+          code: s?.code ?? e.subjectCode,
+          name: s?.name ?? e.subjectName,
+          credits: s?.credits ?? 0,
+          syllabusCode: s?.syllabusCode ?? "",
+        });
       }
     }
     return [...used.values()].sort((a, b) => a.code.localeCompare(b.code));
@@ -118,13 +165,36 @@ export default function MasterRoutine() {
   const lunch = lunchRange(config);
   const byKey = new Map(entries.map((e) => [`${e.classId}|${e.day}|${e.period}`, e]));
 
+  /**
+   * Body rows for one day's sheet: programme band rows (screen only)
+   * interleaved with class rows in master order. Rows removed by the
+   * view filters stay in the DOM with .sheet-filtered-out so printing
+   * still shows the FULL sheet; bands never print (.no-print).
+   */
+  type SheetRow =
+    | { type: "band"; programme: string; key: string }
+    | { type: "class"; c: (typeof sortedClasses)[number]; key: string };
+  const sheetRows: SheetRow[] = useMemo(() => {
+    const rows: SheetRow[] = [];
+    let lastProgramme: string | null = null;
+    for (const c of sortedClasses) {
+      const prog = c.programme ?? c.program;
+      if (prog !== lastProgramme) {
+        rows.push({ type: "band", programme: prog, key: `band-${prog}` });
+        lastProgramme = prog;
+      }
+      rows.push({ type: "class", c, key: c.id });
+    }
+    return rows;
+  }, [sortedClasses]);
+
   /** Render one day's sheet: rows = classes, columns = hourly slots + lunch. */
   const daySheet = (day: string) => {
     // Pre-compute session merges for every class: any block (theory or
     // lab) renders as ONE cell spanning its hours, like the real sheet.
     const consumed = new Set<string>();
     const span = new Map<string, number>();
-    for (const c of classes) {
+    for (const c of sortedClasses) {
       const mine = entries.filter((e) => e.classId === c.id);
       for (const b of sessionBlocks(mine, day).values()) {
         if (b.length > 1) {
@@ -133,6 +203,8 @@ export default function MasterRoutine() {
         }
       }
     }
+    let lunchEmitted = false;
+    const firstClassRowIdx = sheetRows.findIndex((r) => r.type === "class");
     return (
       <section key={day} className="sheet-day mb-6">
         <h3 className="mb-1 text-sm font-bold uppercase tracking-widest text-primary-dark">{day}</h3>
@@ -160,56 +232,76 @@ export default function MasterRoutine() {
               </tr>
             </thead>
             <tbody>
-              {classes.map((c, rowIdx) => (
-                <tr key={c.id}>
-                  <td className="whitespace-nowrap font-semibold">{c.name}</td>
-                  {periods.map((p) => {
-                    const key = `${c.id}|${p}`;
-                    const cells = [];
-                    if (!consumed.has(key)) {
-                      const e = byKey.get(`${c.id}|${day}|${p}`);
-                      cells.push(
-                        <td
-                          key={p}
-                          colSpan={span.get(key) ?? 1}
-                          className={
-                            e
-                              ? `sheet-cell ${e.subjectType === "lab" ? "sheet-lab" : ""} ${e.id === moveId ? "sheet-selected" : ""}`
-                              : "sheet-cell text-center text-slate-300"
-                          }
-                        >
-                          {e ? (
-                            <button
-                              type="button"
-                              className="block h-full w-full cursor-pointer px-1 py-0.5 text-center font-mono text-[13px] font-medium"
-                              title={`${e.subjectName} — ${e.teacherName} · ${e.day} ${sessionRange(config, p, span.get(key) ?? 1)}. Click to select the whole session for Move.`}
-                              onClick={() => {
-                                setMoveId(e.id);
-                                setFeedback(null);
-                              }}
-                            >
-                              {cellText(e)}
-                            </button>
-                          ) : (
-                            "—"
-                          )}
-                        </td>,
-                      );
-                    }
-                    // The merged LUNCH column hangs off the lunchAfter period
-                    // in the first row only — even if that period was merged
-                    // into a lab cell in this row.
-                    if (config.lunchAfter === p && lunch && rowIdx === 0) {
-                      cells.push(
-                        <td key="lunch" rowSpan={classes.length} className="sheet-lunch-body">
-                          LUNCH
-                        </td>,
-                      );
-                    }
-                    return <Fragment key={p}>{cells}</Fragment>;
-                  })}
-                </tr>
-              ))}
+              {sheetRows.map((row, rowIdx) => {
+                if (row.type === "band") {
+                  const bandVisible = sortedClasses.some(
+                    (c) => (c.programme ?? c.program) === row.programme && visibleIds.has(c.id),
+                  );
+                  return (
+                    <tr key={row.key} className={`no-print ${bandVisible ? "" : "hidden"}`}>
+                      <td
+                        colSpan={periods.length + (lunch ? 1 : 0) + 1}
+                        className="bg-teal-700 font-bold uppercase tracking-widest text-white"
+                      >
+                        {row.programme}
+                      </td>
+                    </tr>
+                  );
+                }
+                const c = row.c;
+                const rowVisible = visibleIds.has(c.id);
+                return (
+                  <tr key={c.id} className={rowVisible ? "" : "sheet-filtered-out hidden"}>
+                    <td className="whitespace-nowrap font-semibold">{c.name}</td>
+                    {periods.map((p) => {
+                      const key = `${c.id}|${p}`;
+                      const cells = [];
+                      if (!consumed.has(key)) {
+                        const e = byKey.get(`${c.id}|${day}|${p}`);
+                        cells.push(
+                          <td
+                            key={p}
+                            colSpan={span.get(key) ?? 1}
+                            className={
+                              e
+                                ? `sheet-cell ${e.subjectType === "lab" ? "sheet-lab" : ""} ${e.id === moveId ? "sheet-selected" : ""}`
+                                : "sheet-cell text-center text-slate-300"
+                            }
+                          >
+                            {e ? (
+                              <button
+                                type="button"
+                                className="block h-full w-full cursor-pointer px-1 py-0.5 text-center font-mono text-[13px] font-medium"
+                                title={`${e.subjectName} — ${e.teacherName} · ${e.day} ${sessionRange(config, p, span.get(key) ?? 1)}. Click to select the whole session for Move.`}
+                                onClick={() => {
+                                  setMoveId(e.id);
+                                  setFeedback(null);
+                                }}
+                              >
+                                {cellText(e)}
+                              </button>
+                            ) : (
+                              "—"
+                            )}
+                          </td>,
+                        );
+                      }
+                      // The merged LUNCH column hangs off the lunchAfter period
+                      // in the first CLASS row only — even if that period was
+                      // merged into a lab cell in this row.
+                      if (config.lunchAfter === p && lunch && rowIdx === firstClassRowIdx && !lunchEmitted) {
+                        lunchEmitted = true;
+                        cells.push(
+                          <td key="lunch" rowSpan={sheetRows.length - firstClassRowIdx} className="sheet-lunch-body">
+                            LUNCH
+                          </td>,
+                        );
+                      }
+                      return <Fragment key={p}>{cells}</Fragment>;
+                    })}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -331,6 +423,37 @@ export default function MasterRoutine() {
             </form>
           </div>
 
+          {/* View filters — screen only; printing always shows the full sheet. */}
+          <div className="card no-print mb-6 flex flex-wrap items-center gap-3 px-5 py-3">
+            <span className="text-sm font-semibold">View:</span>
+            {["All", ...programmesPresent].map((p) => (
+              <button
+                key={p}
+                type="button"
+                className={`chip !px-3 !py-1 ${progFilter === p ? "bg-primary text-white" : "bg-teal-100 text-teal-900"}`}
+                onClick={() => setProgFilter(p)}
+              >
+                {p}
+              </button>
+            ))}
+            <label className="ml-2 flex items-center gap-2 text-sm">
+              Year
+              <select
+                className="input w-auto"
+                value={yearFilter}
+                onChange={(e) => setYearFilter(Number(e.target.value))}
+              >
+                <option value={0}>All years</option>
+                {[1, 2, 3, 4].map((y) => (
+                  <option key={y} value={y}>Year {y}</option>
+                ))}
+              </select>
+            </label>
+            <span className="text-xs text-muted">
+              Showing {visibleIds.size} of {sortedClasses.length} classes on screen — print always shows the full sheet.
+            </span>
+          </div>
+
           <div className="master-doc card px-4 py-4">
             {config.days.map((day) => daySheet(day))}
 
@@ -360,6 +483,9 @@ export default function MasterRoutine() {
                       <span className="font-mono font-semibold">{s.code}</span>
                       <span className="text-muted"> = </span>
                       {s.name}
+                      {(s.credits > 0 || s.syllabusCode) && (
+                        <span className="text-muted"> · {s.credits} cr</span>
+                      )}
                     </li>
                   ))}
                 </ul>

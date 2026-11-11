@@ -44,6 +44,12 @@
  *     S1  Spread a subject's sessions across days for a class.
  *     S2  Balance a teacher's load (hours) across the week.
  *     S3  Avoid empty periods stuck between two classes (middle gaps).
+ *     S4  Avoid creating an ORPHAN slot: a free period with no free
+ *         neighbour in its segment. A 3h lab in a 4-slot morning
+ *         orphans the leftover slot; the same lab in the 3-slot
+ *         afternoon fits exactly. Orphans strand the shorter
+ *         sessions that still need placing (a tight class can become
+ *         unfillable), so they are priced into the ranking.
  *
  * Algorithm
  * ---------
@@ -52,10 +58,19 @@
  * 2. ORDER    — hardest first: longer sessions before shorter ones,
  *               then fewest eligible teachers, then most hours.
  *               Placing constrained jobs early leaves easy jobs to fill
- *               the gaps — the classic "fail-first" heuristic.
+ *               the gaps — the classic "fail-first" heuristic. This
+ *               static order is the tie-break for step 3.
  * 3. PLACE    — depth-first search. For the next job, generate every
  *               (day, start, teacher) that passes all hard checks,
- *               sort by soft score, try them in that order.
+ *               sort by soft score, try them in that order. Jobs that
+ *               are IDENTICAL (same class, subject, duration and
+ *               eligible teachers — e.g. the two 3h sessions of a 6h
+ *               lab) are interchangeable, so they are placed in
+ *               non-decreasing (day, start) order: without that
+ *               symmetry break the search wastes factorial effort
+ *               re-trying permutations of the same sessions whenever
+ *               backtracking starts (tight weeks — the 31h MCA weeks
+ *               with four 3h lab blocks — are exactly that case).
  * 4. BACKTRACK— if a job has no legal candidate, undo the previous
  *               placement and try its next candidate. A time limit and
  *               a node budget keep this bounded; the best partial
@@ -248,6 +263,24 @@ export class Solver {
       const gaps = Math.max(...filled) - Math.min(...filled) + 1 - filled.size;
       score += 4 * gaps;
     }
+    // S4: orphan slots created in the session's own segment — a free
+    // period whose in-segment neighbours are both filled/boundary.
+    // Counted as a delta (after minus before) so filling an orphan is
+    // rewarded and pre-existing orphans are not re-charged.
+    const segStart = this.lunchAfter !== null && start > this.lunchAfter ? this.lunchAfter + 1 : 1;
+    const segEnd = this.lunchAfter !== null && start <= this.lunchAfter ? this.lunchAfter : this.periods;
+    const orphans = (set: Set<number>) => {
+      let n = 0;
+      for (let p = segStart; p <= segEnd; p++) {
+        if (set.has(p)) continue;
+        const leftFree = p - 1 >= segStart && !set.has(p - 1);
+        const rightFree = p + 1 <= segEnd && !set.has(p + 1);
+        if (!leftFree && !rightFree) n++;
+      }
+      return n;
+    };
+    const before = this.classDayPeriods.get(`${job.classId}|${day}`) ?? new Set<number>();
+    score += 3 * Math.max(0, orphans(filled) - orphans(before));
     // Mild tie-breakers: earlier day, earlier period (deterministic).
     score += 0.01 * (this.dayIndex.get(day) ?? 0) + 0.01 * start;
     return score;
@@ -313,7 +346,25 @@ export class Solver {
     if (this.placed.length > this.best.length) this.best = [...this.placed];
 
     const job = this.jobs[idx];
+    // Symmetry break: an identical twin of the previous job (same
+    // class, subject, duration and eligible teachers) may only be
+    // placed at or after the twin's (day, start) — the two sessions
+    // are interchangeable, so the mirrored subtree is pure waste.
+    const prev = idx > 0 ? this.jobs[idx - 1] : null;
+    const twin =
+      prev &&
+      prev.classId === job.classId &&
+      prev.subjectId === job.subjectId &&
+      prev.duration === job.duration &&
+      prev.eligibleTeachers.join() === job.eligibleTeachers.join()
+        ? this.placed[this.placed.length - 1]
+        : null;
+    const twinPos = twin
+      ? (this.dayIndex.get(twin.day) ?? 0) * 100 + twin.period
+      : -1;
+
     for (const c of this.candidates(job)) {
+      if (twinPos >= 0 && (this.dayIndex.get(c.day) ?? 0) * 100 + c.start < twinPos) continue;
       this.apply(job, c.day, c.start, c.teacherId);
       if (this.search(idx + 1)) return true;
       this.undo(job, c.day, c.start, c.teacherId);

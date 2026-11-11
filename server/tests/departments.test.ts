@@ -83,7 +83,12 @@ let cseId = "";
 let eceId = "";
 
 beforeAll(async () => {
-  mongod = await MongoMemoryServer.create();
+  // ephemeralForTest keeps the data in RAM: with two memory-server
+  // test files running in parallel workers, the default WiredTiger
+  // on-disk storage can exhaust a small /tmp (512 MB here).
+  mongod = await MongoMemoryServer.create({
+    instance: { storageEngine: "ephemeralForTest" },
+  });
   await mongoose.connect(mongod.getUri("routine-maker-departments-test"));
   await backfillLegacyData();
   server = createApp().listen(0);
@@ -99,13 +104,13 @@ afterAll(async () => {
 });
 
 describe("multi-department storage", () => {
-  it("seed creates the CSE department; generating scopes to it (270 entries)", async () => {
+  it("seed creates the CSE department; generating scopes to it (346 entries)", async () => {
     const seed = await req("POST", "/api/seed");
     expect(seed.status).toBe(200);
     const depts = await departments();
     expect(depts).toHaveLength(1);
     expect(depts[0].shortName).toBe("CSE");
-    expect(depts[0].counts).toMatchObject({ teachers: 32, subjects: 54, classes: 12 });
+    expect(depts[0].counts).toMatchObject({ teachers: 42, subjects: 69, classes: 14 });
     expect(depts[0].isActive).toBe(true);
     cseId = depts[0].id;
 
@@ -113,7 +118,7 @@ describe("multi-department storage", () => {
     expect(gen.status).toBe(200);
     expect((gen.json as { success: boolean }).success).toBe(true);
     const routine = await req("GET", "/api/routine");
-    expect((routine.json as { entries: unknown[] }).entries).toHaveLength(270);
+    expect((routine.json as { entries: unknown[] }).entries).toHaveLength(346);
     expect((routine.json as { config: { departmentShort: string } }).config.departmentShort).toBe("CSE");
   });
 
@@ -128,7 +133,7 @@ describe("multi-department storage", () => {
     const cse = depts.find((d) => d.id === cseId)!;
     const ece = depts.find((d) => d.id === eceId)!;
     // CSE fully intact — including its generated routine.
-    expect(cse.counts).toMatchObject({ teachers: 32, subjects: 54, classes: 12, entries: 270 });
+    expect(cse.counts).toMatchObject({ teachers: 42, subjects: 69, classes: 14, entries: 346 });
     expect(ece.counts).toMatchObject({ teachers: 4, subjects: 5, classes: 2 });
     // The new department becomes active.
     expect(ece.isActive).toBe(true);
@@ -147,17 +152,17 @@ describe("multi-department storage", () => {
     const after = await req("GET", "/api/routine");
     expect((after.json as { entries: unknown[] }).entries).toHaveLength(ECE_TOTAL_HOURS);
 
-    // Switch back to CSE: its 32 teachers and 270 routine entries are all still there.
+    // Switch back to CSE: its 42 teachers and 346 routine entries are all still there.
     const act = await req("POST", `/api/departments/${cseId}/activate`);
     expect(act.status).toBe(200);
     const teachers = await req("GET", "/api/teachers");
-    expect((teachers.json as unknown[]).length).toBe(32);
+    expect((teachers.json as unknown[]).length).toBe(42);
     const routine = await req("GET", "/api/routine");
-    expect((routine.json as { entries: unknown[] }).entries).toHaveLength(270);
+    expect((routine.json as { entries: unknown[] }).entries).toHaveLength(346);
 
-    // GET /api/balance is scoped too (CSE demand = 270h).
+    // GET /api/balance is scoped too (CSE demand = 346h).
     const balance = await req("GET", "/api/balance");
-    expect((balance.json as { totals: { requiredHours: number } }).totals.requiredHours).toBe(270);
+    expect((balance.json as { totals: { requiredHours: number } }).totals.requiredHours).toBe(346);
   });
 
   it("re-seeding CSE refreshes ONLY CSE; ECE survives", async () => {
@@ -189,7 +194,7 @@ describe("multi-department storage", () => {
     const depts = await departments();
     expect(depts).toHaveLength(1);
     expect(depts[0].id).toBe(cseId);
-    expect(depts[0].counts).toMatchObject({ teachers: 32, subjects: 54, classes: 12 });
+    expect(depts[0].counts).toMatchObject({ teachers: 42, subjects: 69, classes: 14 });
     expect(depts[0].isActive).toBe(true);
 
     const delLast = await req("DELETE", `/api/departments/${cseId}`);

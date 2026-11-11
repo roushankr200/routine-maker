@@ -79,9 +79,56 @@ Verified end-to-end (integration tests + production build,
 in-memory Mongo): a sample ECE setup (2 classes, 5 courses incl. 1
 lab, 4 teachers) validates clean, generates with **0 unplaced**, and
 the master API carries the ECE masthead data — while the NITA CSE
-department, including its generated 270-entry routine, stays fully
-intact next to it (270/270 hours, 141/141 sessions). Switching back
+department, including its generated 346-entry routine, stays fully
+intact next to it (346/346 hours, 180/180 sessions). Switching back
 and forth loses nothing; re-seeding CSE refreshes CSE only.
+
+## Setting up from the syllabus — the guided flow
+
+Departments whose syllabus is in the built-in **catalogue** don't
+type subjects in at all. The catalogue (`server/src/catalog/`) holds
+the official course structure extracted from the institute's
+published syllabus PDFs — every programme, semester and subject with
+its **syllabus code, L-T-P, credits** and elective pools (sources and
+caveats: `reference/CATALOGUE-PROVENANCE.md`; for CSE it covers
+B.Tech Sem 1–8, MCA Sem 1–6 and M.Tech Sem 1–4 × AI / Cyber Security
+/ Data Science & Engineering).
+
+The **guided setup** at `/setup/guided` (linked from the Dashboard
+and Setup) walks it semester by semester:
+
+1. **Department & session** — name, session label, Odd/Even, the
+   programmes to include and sections per year (B.Tech Year 1 is the
+   syllabus's Group I + Group II). Semesters with nothing timetabled
+   (M.Tech Sem 3/4, MCA Sem 6 — project/viva only) are auto-skipped.
+2. **One screen per semester** — every preloaded subject is listed
+   per class with its code, syllabus code, weekly hours and
+   **credits** (the semester's credit total is shown at the top, and
+   project/viva items are listed greyed as not-timetabled). For each
+   subject you pick the section's elective (for elective slots) and
+   a **teacher**, or **XX** — "no teacher yet", exactly as the real
+   sheet prints unassigned slots. **Next stays disabled until every
+   subject of the semester is assigned.**
+3. **Teacher pool** — teachers are added once and carry across all
+   semesters (never re-typed); a live side panel accumulates each
+   teacher's assigned weekly hours against their weekly max.
+4. **Review & create** — per-semester coverage (subjects, credits,
+   teachers used, XX count) and the teacher load table. One call
+   (`POST /api/setup/guided`) creates the department: the server
+   **re-resolves every subject from the catalogue** (client-sent
+   hours/credits are never trusted), rejects incomplete or over-max
+   assignments with a problems list, and answers 409 on a duplicate
+   name. XX subjects are assigned to one internal placeholder teacher
+   (code `XX`, hidden from teacher lists and counts) so generation
+   succeeds and the slots print as `XX` on the master sheet.
+
+Eligibility is exactly the assignment: a teacher can teach the
+subjects they were assigned, in the classes they were assigned them.
+
+The **CSE seed itself is built from the same catalogue** — classes,
+subjects, hours and credits are derived from it (see
+`server/src/demoData.ts`), so the one-click department and the
+guided flow can never drift apart.
 
 ## Coverage & balance — hours left, and who is getting less
 
@@ -129,7 +176,7 @@ language and the same data shapes.
 | Backend  | Node.js + Express 4 + TypeScript, Zod validation on every input |
 | Database | MongoDB via Mongoose (Atlas in production; in-memory locally) |
 | Solver   | Custom constraint solver in `server/src/solver/` — no external library |
-| Tests    | Vitest — 15 solver tests (rule invariants + block-session model), no database needed |
+| Tests    | Vitest — 49 tests: solver invariants + block-session model, catalogue integrity, multi-department storage and guided setup (integration ones use in-memory Mongo) |
 
 ## Quick start (zero setup)
 
@@ -157,23 +204,25 @@ With a real database (MongoDB Atlas):
 MONGODB_URI="mongodb+srv://<user>:<pass>@<cluster>/routine-maker" npm start
 ```
 
-Tests (pure solver, in-memory data, no DB):
+Tests:
 
 ```bash
-npm test             # vitest: 15 tests
+npm test             # vitest: 49 tests
 ```
 
 ## Demo walkthrough (5 steps)
 
 1. Open the app → **Load NIT Agartala CSE Data** (the real NITA CSE
-   department dataset: 32 faculty with their sheet codes — DJB, PB,
-   MKDB, TP, … — 54 subjects from the real legends, 12 classes:
-   B.Tech Sem 3 / 5 / 7 (A + B), MCA Sem 1 / 3 / 5, M.Tech Sem 1
+   department dataset: 42 faculty with their sheet codes — DJB, PB,
+   MKDB, TP, … (32 from the sheet + 10 generic first-year
+   placeholders) — 69 subjects, 14 classes: B.Tech Sem 1 (Group I +
+   Group II) / 3 / 5 / 7 (A + B), MCA Sem 1 / 3 / 5, M.Tech Sem 1
    CYSEC / DSE / AI; Mon–Fri, hourly grid from 9:00, lunch 1:00–2:00
-   after P4; theory subjects run 2h sessions, labs single 3h blocks).
-   Assignments follow the ones printed on the real sheet wherever it
-   names a teacher: MCA Sem 5 AI / AI Lab = DJB, CD / CD Lab = PB,
-   E-COMM + WCN = MKDB, DIP = TP; B.Tech DBMS = SN, OS = SDB,
+   after P4; theory subjects run 2h sessions, labs single 3h blocks,
+   syllabus-derived hours and credits throughout). Assignments
+   follow the ones printed on the real sheet wherever it names a
+   teacher: MCA Sem 5 AI / AI Lab = DJB, CD / CD Lab = PB,
+   WCN = MKDB, DIP = TP; B.Tech DBMS = SN, OS = SDB,
    ML 7A = KC / 7B = AJ, M.Tech CRYPTO = NK, …
 2. Open **Validation** — demand vs eligible-teacher capacity per subject.
 3. Click **Generate Routine**.
@@ -187,9 +236,9 @@ npm test             # vitest: 15 tests
    break."*).
 
 **Measured on the NITA demo data** (actual runs of this codebase):
-the full CSE department solves to **270/270 hours (141/141
-sessions), 0 unplaced**, search **141 nodes** (no backtracking
-needed), **≈0.02 s**. All **15/15 tests pass**.
+the full CSE department solves to **346/346 hours (180/180
+sessions), 0 unplaced**, search **182 nodes** (no backtracking
+needed), **≈0.03 s**. All **49/49 tests pass**.
 
 ## Session model (the real sheet's blocks, not single periods)
 
@@ -208,12 +257,11 @@ plus **one shorter remainder session** when they don't divide evenly
 A session must sit entirely inside the morning segment (P1–P4) or the
 afternoon segment (P5–P7) — **no session ever crosses lunch**, so a
 3h block can only start at P1, P2 or P5. In the demo seed the MCA
-classes each run 12 sessions/week (five theory subjects at 2+2 or
-2+1, two labs as single 3h blocks — Sem 1 = 25h, Sem 3 = 24h,
-Sem 5 = 23h); the B.Tech and M.Tech classes follow the same pattern
-at their own loads (B.Tech Sem 3 = 27h, Sem 5 = 31h, Sem 7 = 11h —
-the real 7th-sem sheet carries only ML + electives, the rest is
-project work; M.Tech = 18–21h).
+classes each run 14 sessions/week (Sem 1 = 31h, Sem 3 = 31h,
+Sem 5 = 28h); the B.Tech and M.Tech classes follow the same pattern
+at their own loads (B.Tech Sem 1 = 25/26h, Sem 3 = 26h, Sem 5 = 28h,
+Sem 7 = 11h — the real 7th-sem sheet carries only ML + electives,
+the rest is project work; M.Tech Sem 1 = 25h).
 
 ## The master sheet (NITA format)
 
@@ -232,7 +280,7 @@ The Master Routine page reproduces the department's real sheet:
   clock, exactly like the real sheet: P1 9:00–10:00 … P4 12:00–1:00,
   **LUNCH 1:00–2:00**, P5 2:00–3:00 … P7 4:00–5:00).
 - **Sheet notation in cells** — `SUBJECT - TEACHERCODE`
-  (`AI - DJB`, `E-COMM - MKDB`), with every session **merged across
+  (`AI - DJB`, `WCN - MKDB`), with every session **merged across
   its hours** (colSpan = session length): a 2h theory block reads as
   one cell over 9:00–11:00, a 3h lab as one cell over 2:00–5:00 —
   exactly the real sheet's rendering. Faculty codes live on the
@@ -273,7 +321,10 @@ since sessions are blocks) · **H5** exact subject hours per class ·
 length, never across lunch (no session of any kind crosses lunch).
 Soft preferences (ranking only): **S1** spread a subject's sessions
 across days · **S2** balance teacher load · **S3** avoid middle gaps
-in a class's day.
+in a class's day · **S4** avoid creating orphan free slots (a lone
+free period with no free neighbour in its segment — 3h labs prefer
+the exact-fit afternoon over orphaning a morning slot). Identical
+twin sessions are symmetry-broken onto non-decreasing days.
 
 The same checks re-validate every manual Move/Swap instantly
 (`server/src/routineCheck.ts`): moving an entry moves its **whole
@@ -286,8 +337,18 @@ session block**, and the full span is clash-checked before applying.
 - `POST /setup/department` — the New Department wizard's single commit
   endpoint: full department payload (identity + classes + courses +
   teachers + hours mapping, cross-referenced by course code),
-  validated before the workspace is replaced; returns counts + the
-  validation summary
+  validated before anything is written; returns counts + the
+  validation summary (creates a NEW department alongside existing
+  ones; nothing is ever replaced)
+- `GET /catalog`, `GET /catalog/:deptId` — the built-in syllabus
+  catalogue (departments → programmes → semesters → subjects with
+  credits, syllabus codes, L-T-P and elective pools)
+- `POST /setup/guided` — the guided setup's single commit endpoint:
+  catalogue id + department fields + teachers + per-class
+  {key → teacher | XX, electivePick} assignments; the server
+  re-resolves subjects from the catalogue, validates completeness /
+  teacher weekly max / duplicate name (409) and creates the new
+  department scoped alongside the existing ones
 - Teachers: `GET/POST /teachers`, `PUT/DELETE /teachers/:id`,
   `GET/PUT /teachers/:id/availability`
 - Subjects: `GET/POST /subjects`, `PUT/DELETE /subjects/:id`
@@ -359,24 +420,32 @@ does not fake yet:
   placeholder (`DBMS Lab - 5A1 - RD, VD, Sch - 215`).
 - **Combined cohorts for electives** — one class, two programmes
   (DIP: MCA 5th + BTMT 7th), and parallel elective groups.
-- **Unassigned slots** — teacher `XX` tolerated and surfaced, as the
-  real sheet prints them.
 - **Teacher-code aliases** — the real sheet itself lists one person
   under two codes (AS / ABC); identity must dedupe by person.
+
+*(Done since: **unassigned slots** — the guided setup accepts `XX`
+for any subject; those slots generate under a hidden placeholder
+teacher and print as `XX` on the master sheet, as the real sheet
+prints them.)*
 
 ## Project layout
 
 ```text
 server/src/
   solver/     types.ts (plain data shapes) + solver.ts (the engine)
+              + balance.ts (coverage & balance suggestion engine)
+  catalog/    the syllabus catalogue: types.ts + cse.ts + index.ts
+              (official structures; see reference/CATALOGUE-PROVENANCE.md)
   models.ts   Mongoose models        routes.ts   REST API
   data.ts     DB -> solver data + validation report
   seed.ts     demo loader            schemas.ts  Zod input schemas
+  departments.ts  multi-department storage (scoping, counts, backfill)
   routineCheck.ts  move/swap validation (H1–H7)
-  demoData.ts demo constants shared by seed + tests
+  demoData.ts CSE seed, derived from the catalogue (shared by seed + tests)
 client/src/
   pages/      Dashboard, Teachers, Availability, Subjects, Classes,
               Setup, DepartmentWizard (the New Department wizard),
+              GuidedSetup (the syllabus-guided setup),
               MasterRoutine, ByClass, ByTeacher, Validation
   components/ Layout + shared UI (grid, banners, chips)
   utils/csv.ts  client-side CSV export

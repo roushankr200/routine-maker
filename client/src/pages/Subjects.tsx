@@ -5,7 +5,14 @@ import { deleteSubject, errorMessage, fetchSubjects, saveSubject } from "../api"
 import type { Subject } from "../types";
 import { Banner, PageTitle, SubjectChip } from "../components/ui";
 
-const empty: Partial<Subject> = { name: "", code: "", type: "theory", sessionHours: 2 };
+const empty: Partial<Subject> = {
+  name: "",
+  code: "",
+  type: "theory",
+  sessionHours: 2,
+  credits: 0,
+  syllabusCode: "",
+};
 
 export default function Subjects() {
   const qc = useQueryClient();
@@ -80,6 +87,19 @@ export default function Subjects() {
               One session = consecutive hours on the grid (real sheet: theory 1–2h, labs 2–3h).
             </p>
           </div>
+          <div>
+            <label className="label" htmlFor="s-credits">Credits</label>
+            <input id="s-credits" className="input" type="number" min={0} max={40}
+              value={form.credits ?? 0}
+              onChange={(e) => setForm({ ...form, credits: Number(e.target.value) })} />
+            <p className="mt-1 text-xs text-muted">From the syllabus (0 = not a syllabus subject).</p>
+          </div>
+          <div>
+            <label className="label" htmlFor="s-syllabus-code">Syllabus code (optional)</label>
+            <input id="s-syllabus-code" className="input font-mono" placeholder="UCS03B08"
+              value={form.syllabusCode ?? ""}
+              onChange={(e) => setForm({ ...form, syllabusCode: e.target.value })} />
+          </div>
         </div>
         <div className="mt-4 flex gap-2">
           <button type="submit" className="btn-primary" disabled={save.isPending}>
@@ -101,16 +121,23 @@ export default function Subjects() {
               <th className="th">Name</th>
               <th className="th">Type</th>
               <th className="th">Session</th>
+              <th className="th">Credits</th>
               <th className="th">Actions</th>
             </tr>
           </thead>
           <tbody>
             {subjects.map((s) => (
               <tr key={s.id} className="border-b border-line">
-                <td className="td"><SubjectChip code={s.code} type={s.type} /></td>
+                <td className="td">
+                  <SubjectChip code={s.code} type={s.type} />
+                  {s.syllabusCode && (
+                    <span className="ml-2 font-mono text-[11px] text-muted">{s.syllabusCode}</span>
+                  )}
+                </td>
                 <td className="td font-medium">{s.name}</td>
                 <td className="td capitalize">{s.type}</td>
                 <td className="td font-mono">{s.sessionHours ?? (s.type === "lab" ? 3 : 2)}h blocks</td>
+                <td className="td font-mono">{s.credits ?? 0}</td>
                 <td className="td">
                   <div className="flex gap-1">
                     <button className="btn-ghost !min-h-[36px] px-2" aria-label={`Edit ${s.name}`}
@@ -126,7 +153,7 @@ export default function Subjects() {
               </tr>
             ))}
             {subjects.length === 0 && (
-              <tr><td className="td text-muted" colSpan={5}>No subjects yet.</td></tr>
+              <tr><td className="td text-muted" colSpan={6}>No subjects yet.</td></tr>
             )}
           </tbody>
         </table>

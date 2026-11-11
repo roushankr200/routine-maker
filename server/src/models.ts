@@ -58,6 +58,14 @@ export interface ITeacher {
   weeklyHours: number;
   /** Eligibility (H6): subjects this teacher can teach. */
   subjects: Types.ObjectId[];
+  /**
+   * Internal placeholder teacher (code "XX") created by the guided
+   * setup for subjects with no teacher assigned yet — the real sheet
+   * prints such slots as XX. Excluded from teacher lists and counts;
+   * eligible for exactly the XX subjects so generation still succeeds
+   * and the slots surface as XX on the master sheet.
+   */
+  isPlaceholder: boolean;
 }
 const teacherSchema = new Schema<ITeacher>({
   departmentId: departmentRef,
@@ -67,6 +75,7 @@ const teacherSchema = new Schema<ITeacher>({
   maxPerDay: { type: Number, required: true, default: 4 },
   weeklyHours: { type: Number, required: true, default: 16 },
   subjects: [{ type: Schema.Types.ObjectId, ref: "Subject" }],
+  isPlaceholder: { type: Boolean, default: false },
 });
 export const Teacher = mongoose.model<ITeacher>("Teacher", teacherSchema);
 
@@ -80,6 +89,10 @@ export interface ISubject {
    * (default 2), lab 2–3 (default 3) — the real NITA sheet's blocks.
    */
   sessionHours: number;
+  /** Syllabus credits for this subject (0 = not from a syllabus / unset). */
+  credits: number;
+  /** The code printed in the syllabus document, e.g. "UCS03B08" ("" if none). */
+  syllabusCode: string;
 }
 const subjectSchema = new Schema<ISubject>({
   departmentId: departmentRef,
@@ -92,6 +105,8 @@ const subjectSchema = new Schema<ISubject>({
       return this.type === "lab" ? 3 : 2;
     },
   },
+  credits: { type: Number, required: true, default: 0 },
+  syllabusCode: { type: String, default: "" },
 });
 export const Subject = mongoose.model<ISubject>("Subject", subjectSchema);
 
@@ -100,12 +115,27 @@ export interface IClassSection {
   program: string;
   year: string;
   section: string;
+  /**
+   * Programme classification used for master-sheet grouping/filtering
+   * ("B.Tech" | "M.Tech" | "MCA" | …). Mirrors `program` when the
+   * creator does not set it separately.
+   */
+  programme: string;
+  /** Numeric semester (1–8) when known — drives grouping/filters. */
+  semesterNumber: number | null;
 }
 const classSectionSchema = new Schema<IClassSection>({
   departmentId: departmentRef,
   program: { type: String, required: true },
   year: { type: String, required: true },
   section: { type: String, default: "" },
+  programme: {
+    type: String,
+    default: function (this: IClassSection) {
+      return this.program;
+    },
+  },
+  semesterNumber: { type: Number, default: null },
 });
 export const ClassSection = mongoose.model<IClassSection>("ClassSection", classSectionSchema);
 

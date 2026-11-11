@@ -95,7 +95,9 @@ Teachers: AI + AI Lab → DJB (Dr. Dhrubajyoti Bhowmik); CD + CD Lab → PB (Dr.
 
 ## 9. Built-in seed coverage (Routine Maker implementation note)
 
-The app's preloaded seed covers the **full CSE department** from this sheet: B.Tech Sem 3/5/7 (A + B), MCA Sem 1/3/5, M.Tech Sem 1 CYSEC/DSE/AI — 12 classes, 54 subjects, 32 faculty (the §5 table plus the further named faculty in the PDF footer). BTMT/MBA cohorts are other departments' and are not seeded. Documented simplifications vs the real sheet: electives are modelled as a **fixed set per section** (B.Tech 5A = FC + DIP, 5B = FC + CG; 7A = IR + CC, 7B = BD + SC) instead of combined parallel elective groups (§2/§8 items 2–4 remain v3); B.Tech 7th sem has **no lab** — the sheet itself lists only ML + electives for 7th sem, so none was invented; rooms, lab-group splits (A1/A2) and `Sch`/`XX` placeholders are not modelled (v3 roadmap).
+Historical (v2.2): the seed covered this sheet's department — B.Tech Sem 3/5/7 (A + B), MCA Sem 1/3/5, M.Tech Sem 1 CYSEC/DSE/AI — 12 classes, 54 subjects, 32 faculty, 270 h / 141 sessions.
+
+**Current seed (2026-11-11)** is derived from the syllabus catalogue (see `reference/CATALOGUE-PROVENANCE.md`): 14 classes (the sheet's 12 plus B.Tech Sem 1 Group I + Group II), 69 subjects, 42 teachers (the 32 + 10 generic first-year placeholders). Weekly hours are the syllabi's L+T+P: MCA labs are 0-0-6 → two 3h sessions (MCA = 31h/31h/28h), M.Tech Sem 1 = 25h. Electives are a fixed pick per section (B.Tech 5A = DIP, 5B = CG — FC stays in the catalogue pool unpicked; 7A = IR + CC, 7B = BD + SC; MCA 5 = WCN + DIP; M.Tech AI = NLP + IR, CYSEC = ACN + DH, DSE = NLP + IR) instead of combined parallel elective groups (§2/§8 items 2–4 remain v3); B.Tech 7th sem has **no lab** — the sheet itself lists only ML + electives for 7th sem, so none was invented; rooms and lab-group splits (A1/A2) are not modelled (v3 roadmap). `XX` placeholders ARE now modelled — via the guided setup's hidden placeholder teacher. Generation: **346/346 hours, 180/180 sessions, 0 unplaced**.
 
 ## 10. Multi-department storage (Routine Maker implementation note)
 

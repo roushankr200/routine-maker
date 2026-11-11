@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Save, Wand2 } from "lucide-react";
+import { BookOpen, Save, Wand2 } from "lucide-react";
 import { errorMessage, fetchConfig, saveConfig } from "../api";
 import { Banner, PageTitle } from "../components/ui";
 
@@ -56,16 +56,22 @@ export default function Setup() {
   return (
     <div>
       <PageTitle title="Setup — Time Structure">
-        <Link className="btn-accent" to="/setup/wizard">
+        <Link className="btn-ghost" to="/setup/wizard">
           <Wand2 className="h-4 w-4" aria-hidden /> Set up a new department
+        </Link>
+        <Link className="btn-accent" to="/setup/guided">
+          <BookOpen className="h-4 w-4" aria-hidden /> Set up from syllabus (guided)
         </Link>
       </PageTitle>
       {feedback && <Banner kind={feedback.kind} text={feedback.text} />}
       <div className="card mb-5 max-w-2xl border-teal-300 px-5 py-4">
-        <h2 className="mb-1 font-semibold">New department? Use the wizard.</h2>
+        <h2 className="mb-1 font-semibold">New department? Start from its syllabus.</h2>
         <p className="text-sm text-muted">
           The institute (NIT Agartala) and this time grid are the same for every department.
-          The <strong>setup wizard</strong> asks only what changes — department name, how many
+          The <strong>guided setup</strong> preloads every subject from the official syllabus
+          catalogue (codes, hours, credits) and walks you semester by semester through
+          assigning them to teachers. For a department with no catalogue, the{" "}
+          <strong>setup wizard</strong> asks only what changes — department name, how many
           classes, courses and teachers — checks the numbers, and then the rule engine builds
           that department's routine in the same master format.
         </p>

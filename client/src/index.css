@@ -108,6 +108,11 @@
   .no-print {
     display: none !important;
   }
+  /* Rows hidden by the master sheet's screen-only view filters must
+     reappear in print: the printed sheet is always the full sheet. */
+  .sheet-filtered-out {
+    display: table-row !important;
+  }
   body {
     background: #fff !important;
   }

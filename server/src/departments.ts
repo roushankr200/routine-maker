@@ -90,7 +90,8 @@ export async function deleteDepartmentData(departmentId: string): Promise<void> 
 export async function departmentCounts(departmentId: string) {
   const filter = scope(departmentId);
   const [teachers, subjects, classes, entries] = await Promise.all([
-    Teacher.countDocuments(filter),
+    // The internal XX placeholder is not a teacher — never counted.
+    Teacher.countDocuments({ ...filter, isPlaceholder: { $ne: true } }),
     Subject.countDocuments(filter),
     ClassSection.countDocuments(filter),
     RoutineEntry.countDocuments(filter),

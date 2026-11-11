@@ -36,12 +36,13 @@ describe("demo dataset solves clean", () => {
     expect(result.success, `unplaced: ${JSON.stringify(result.unplaced)}`).toBe(true);
     const total = classSubjects.reduce((s, c) => s + c.hours, 0);
     expect(result.entries.length).toBe(total);
-    // Full NITA CSE department seed (block model): B.Tech 3A/3B = 27h,
-    // 5A/5B = 31h, 7A/7B = 11h; MCA 25h + 24h + 23h; M.Tech CYSEC 18h,
-    // DSE 21h, AI 21h = 270 hours in 141 sessions (theory split 2+2 or
-    // 2+1, labs as single 3h blocks, Seminar 1h).
-    expect(total).toBe(270);
-    expect(result.totalJobs).toBe(141);
+    // Full NITA CSE department seed, derived from the syllabus
+    // catalogue (block model): B.Tech Sem 1 Group I/II = 25h + 26h,
+    // 3A/3B = 26h, 5A/5B = 28h, 7A/7B = 11h; MCA 31h + 31h + 28h
+    // (labs are 0-0-6 -> two 3h sessions); M.Tech CYSEC/DSE/AI = 25h
+    // each (labs 0-0-2 -> one 2h session) = 346 hours in 180 sessions.
+    expect(total).toBe(346);
+    expect(result.totalJobs).toBe(180);
   });
 
   it("H1: no teacher teaches two classes in the same slot", () => {
@@ -136,10 +137,20 @@ describe("block sessions (the real sheet's model)", () => {
     const labIds = new Set([...subjects.values()].filter((s) => s.type === "lab").map((s) => s.id));
     const labs = result.placements.filter((p) => labIds.has(p.job.subjectId));
     expect(labs.length).toBeGreaterThan(0);
+    const hoursOf = new Map(classSubjects.map((cs) => [`${cs.classId}|${cs.subjectId}`, cs.hours]));
     for (const p of labs) {
       const subject = subjects.get(p.job.subjectId)!;
-      // Demo labs: 3h/week at sessionHours 3 -> exactly one 3h block each.
-      expect(p.job.duration).toBe(subject.sessionHours);
+      // A lab session is one full block of the subject's session
+      // length — or the single shorter remainder when the class's
+      // hours don't divide evenly. The one remainder case in the
+      // seed: M.Tech's AI Lab (2h/week) shares MCA's AI Lab subject
+      // (sessionHours 3), so it places as one unbroken 2h block.
+      const hours = hoursOf.get(`${p.job.classId}|${p.job.subjectId}`)!;
+      const remainder = hours % subject.sessionHours;
+      expect(
+        p.job.duration === subject.sessionHours || p.job.duration === remainder,
+        `${subject.code} for ${p.job.classId}: duration ${p.job.duration}`,
+      ).toBe(true);
       expect(insideOneSegment(p.period, p.job.duration, config.lunchAfter)).toBe(true);
     }
   });

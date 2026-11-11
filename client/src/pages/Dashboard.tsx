@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Database, Play, Trash2, Wand2 } from "lucide-react";
+import { BookOpen, Database, Play, Trash2, Wand2 } from "lucide-react";
 import {
   activateDepartment,
   clearRoutine,
@@ -78,6 +78,9 @@ export default function Dashboard() {
         <button className="btn-ghost" onClick={() => seed.mutate()} disabled={seed.isPending}>
           <Database className="h-4 w-4" aria-hidden /> Load NIT Agartala CSE Data
         </button>
+        <Link className="btn-ghost" to="/setup/guided">
+          <BookOpen className="h-4 w-4" aria-hidden /> Set up from syllabus (guided)
+        </Link>
         <Link className="btn-ghost" to="/setup/wizard">
           <Wand2 className="h-4 w-4" aria-hidden /> Set up a new department
         </Link>
@@ -198,14 +201,24 @@ export default function Dashboard() {
           department you have created keeps its data.
         </p>
         <ol className="list-inside list-decimal space-y-1 text-sm">
-          <li>Click Load NIT Agartala CSE Data (32 faculty, 54 subjects incl. 14 labs, 12 classes — B.Tech Sem 3 / 5 / 7 A+B, MCA Sem 1 / 3 / 5, M.Tech CYSEC / DSE / AI — the real NITA CSE subjects and faculty codes, Mon–Fri).</li>
+          <li>Click Load NIT Agartala CSE Data (42 faculty, 69 subjects incl. 20 labs, 14 classes — B.Tech Sem 1 Group I + II / Sem 3 / 5 / 7 A+B, MCA Sem 1 / 3 / 5, M.Tech CYSEC / DSE / AI — subjects, hours and credits derived from the official syllabus catalogue, faculty from the real sheet, Mon–Fri).</li>
           <li>Open Validation — check demand vs teacher capacity per subject.</li>
           <li>Click Generate Routine.</li>
           <li>View the Master sheet (NITA format: time-headed columns, LUNCH, faculty + subject legends) / per-class / per-teacher routines, export CSV, or print the master sheet.</li>
           <li>Try a manual Move on the master view — illegal moves are rejected with the rule broken.</li>
         </ol>
         <p className="mb-2 mt-4 text-sm">
-          <strong>Path B — any other NITA department</strong> (ECE, Civil, ME, …):{" "}
+          <strong>Path B — set up from the syllabus (guided)</strong>:{" "}
+          <Link className="font-medium text-primary-dark underline" to="/setup/guided">
+            open the guided setup
+          </Link>
+          . Subjects are preloaded from the official syllabus catalogue (codes, hours,
+          credits) — you pick the programmes and session, then assign each semester's
+          subjects to teachers, semester by semester; Generate unlocks when everything
+          is assigned (subjects with no teacher yet are marked XX, like the real sheet).
+        </p>
+        <p className="mb-2 mt-4 text-sm">
+          <strong>Path C — any other NITA department</strong> (ECE, Civil, ME, …):{" "}
           <Link className="font-medium text-primary-dark underline" to="/setup/wizard">
             open the setup wizard
           </Link>

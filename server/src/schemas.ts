@@ -20,6 +20,10 @@ export const subjectSchema = z
      * the route fills the type default (theory 2, lab 3) when omitted.
      */
     sessionHours: z.coerce.number().int().min(1).max(3).optional(),
+    /** Syllabus credits (from the catalogue for syllabus subjects). */
+    credits: z.coerce.number().int().min(0).max(40).default(0),
+    /** Code as printed in the syllabus document, e.g. "UCS03B08". */
+    syllabusCode: z.string().trim().max(24).default(""),
   })
   .superRefine((v, ctx) => {
     if (v.sessionHours === undefined) return;
@@ -43,6 +47,10 @@ export const classSchema = z.object({
   program: z.string().trim().min(1, "program is required"),
   year: z.string().trim().min(1, "year is required"),
   section: z.string().trim().default(""),
+  /** Programme classification for master-sheet grouping (defaults to program). */
+  programme: z.string().trim().max(40).optional(),
+  /** Numeric semester when known; the route derives it from `year` otherwise. */
+  semesterNumber: z.coerce.number().int().min(1).max(12).nullable().optional(),
 });
 
 export const classSubjectSchema = z.object({
@@ -150,6 +158,66 @@ export const balancePreviewSchema = z.object({
       }),
     )
     .default([]),
+});
+
+// ------------------------------------------------------- guided setup
+/**
+ * POST /api/setup/guided — the syllabus-guided setup payload.
+ *
+ * The client walks the CATALOGUE semester by semester and sends only
+ * DECISIONS: which teachers exist (the pool) and, per class, which
+ * teacher takes each preloaded subject (or "XX" = no teacher yet) and
+ * which option each elective slot takes. Subject hours, credits and
+ * session lengths are NEVER taken from the client — the route
+ * re-resolves them from the server-side catalogue.
+ */
+export const guidedSetupSchema = z.object({
+  catalogueId: z.string().trim().min(1).default("CSE"),
+  department: z.object({
+    name: z.string().trim().min(1, "department name is required").max(80),
+    short: z.string().trim().min(1, "department short name is required").max(12),
+    session: z.string().trim().min(1).max(40).default("ODD 2026"),
+    effectiveFrom: z.string().trim().max(20).default(""),
+  }),
+  teachers: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1, "teacher name is required"),
+        code: z.string().trim().min(1, "teacher code is required").max(12),
+        designation: z.string().trim().default(""),
+        maxPerDay: z.coerce.number().int().min(0).max(20).default(5),
+        /** The teacher's weekly max hours — assignments may not exceed it. */
+        weeklyHours: z.coerce.number().int().min(0).max(80),
+      }),
+    )
+    .min(1, "at least one teacher is required")
+    .max(120),
+  classes: z
+    .array(
+      z.object({
+        programme: z.string().trim().min(1),
+        /** M.Tech specialisation, exactly as named in the catalogue. */
+        specialisation: z.string().trim().max(60).optional(),
+        semester: z.coerce.number().int().min(1).max(8),
+        section: z.string().trim().max(20).default(""),
+        /** B.Tech Sem 1/2 section variant: "I" | "II". */
+        group: z.enum(["I", "II"]).optional(),
+        assignments: z
+          .array(
+            z.object({
+              /** Catalogue subject key (its shortCode in the catalogue). */
+              key: z.string().trim().min(1),
+              /** Teacher CODE from the pool, or "XX" = no teacher yet. */
+              teacherCode: z.string().trim().min(1),
+              /** For elective slots: the picked option's shortCode. */
+              electivePick: z.string().trim().min(1).optional(),
+            }),
+          )
+          .min(1),
+      }),
+    )
+    .min(1, "at least one class is required")
+    .max(60),
 });
 
 export const departmentSetupSchema = z.object({
