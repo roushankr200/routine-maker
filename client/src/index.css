@@ -77,6 +77,27 @@
     @apply bg-orange-50 text-center align-middle font-bold tracking-[0.3em] text-accent-dark;
     writing-mode: vertical-rl;
   }
+  /* Master-sheet lunch column, stacked from PER-ROW cells (a cross-row
+     rowSpan corrupts the grid around band rows and filtered rows).
+     The stacked cells read as one continuous merged column: the
+     hairline between two stacked lunch cells is painted in the
+     column's own background colour, and only the cells at a stack
+     segment's edges (next to the header, a band row, or the table
+     bottom) keep the real hairline. */
+  .sheet-lunch-cell {
+    @apply bg-orange-50 text-center align-middle font-bold tracking-[0.3em] text-accent-dark;
+    writing-mode: vertical-rl;
+  }
+  .sheet-table td.sheet-lunch-cell {
+    border-top-color: #fff7ed; /* orange-50, the cell background */
+    border-bottom-color: #fff7ed;
+  }
+  .sheet-table td.sheet-lunch-cell.sheet-lunch-first {
+    border-top-color: #9db8b3;
+  }
+  .sheet-table td.sheet-lunch-cell.sheet-lunch-last {
+    border-bottom-color: #9db8b3;
+  }
   .sheet-lab {
     @apply bg-orange-50;
   }
@@ -139,6 +160,16 @@
   .sheet-table th,
   .sheet-table td {
     border: 1px solid #000 !important;
+  }
+  /* In print the band rows vanish, so the stacked lunch cells form one
+     unbroken column: hide the seams (white on the forced-white print
+     background), but keep the table's bottom edge under the column. */
+  .sheet-table td.sheet-lunch-cell {
+    border-top-color: #fff !important;
+    border-bottom-color: #fff !important;
+  }
+  .sheet-table tbody tr:last-child td.sheet-lunch-cell {
+    border-bottom-color: #000 !important;
   }
   .sheet-day {
     break-inside: avoid;

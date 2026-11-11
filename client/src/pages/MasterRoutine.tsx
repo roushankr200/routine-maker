@@ -80,6 +80,20 @@ export default function MasterRoutine() {
       ),
     [sortedClasses],
   );
+  /**
+   * Year options DERIVED from the classes of the currently selected
+   * programme (year = ceil(semester/2)): B.Tech runs 4 years, MCA 3,
+   * M.Tech 2 — never offer a year the programme doesn't have.
+   */
+  const yearOptions = useMemo(() => {
+    const years = new Set<number>();
+    for (const c of sortedClasses) {
+      const prog = c.programme ?? c.program;
+      if (progFilter !== "All" && prog !== progFilter) continue;
+      if (c.semesterNumber != null) years.add(Math.ceil(c.semesterNumber / 2));
+    }
+    return [...years].sort((a, b) => a - b);
+  }, [sortedClasses, progFilter]);
 
   const entries = useMemo(() => data?.entries ?? [], [data]);
   const cellText = (e: RoutineEntry) =>
@@ -203,8 +217,6 @@ export default function MasterRoutine() {
         }
       }
     }
-    let lunchEmitted = false;
-    const firstClassRowIdx = sheetRows.findIndex((r) => r.type === "class");
     return (
       <section key={day} className="sheet-day mb-6">
         <h3 className="mb-1 text-sm font-bold uppercase tracking-widest text-primary-dark">{day}</h3>
@@ -250,6 +262,14 @@ export default function MasterRoutine() {
                 }
                 const c = row.c;
                 const rowVisible = visibleIds.has(c.id);
+                // The lunch column is stacked from per-row cells (see the
+                // lunch cell below); a cell at the START of a stack segment
+                // (first row of the table or right after a band row) keeps
+                // its top hairline, one at the END keeps its bottom one.
+                const prevRow = sheetRows[rowIdx - 1];
+                const nextRow = sheetRows[rowIdx + 1];
+                const lunchFirst = !prevRow || prevRow.type === "band";
+                const lunchLast = !nextRow || nextRow.type === "band";
                 return (
                   <tr key={c.id} className={rowVisible ? "" : "sheet-filtered-out hidden"}>
                     <td className="whitespace-nowrap font-semibold">{c.name}</td>
@@ -286,13 +306,22 @@ export default function MasterRoutine() {
                           </td>,
                         );
                       }
-                      // The merged LUNCH column hangs off the lunchAfter period
-                      // in the first CLASS row only — even if that period was
-                      // merged into a lab cell in this row.
-                      if (config.lunchAfter === p && lunch && rowIdx === firstClassRowIdx && !lunchEmitted) {
-                        lunchEmitted = true;
+                      // The LUNCH cell is rendered PER CLASS ROW (rowSpan 1),
+                      // pushed at the lunchAfter position even when that
+                      // period's own cell was consumed by a session span.
+                      // A single cross-row span corrupts the grid: band rows
+                      // steal a column from the carried cell (shifting every
+                      // row below them) and `hidden` filtered rows emit no
+                      // carried cell at all (losing the column in filtered
+                      // views) — classes appeared "in lunch time". The
+                      // .sheet-lunch-cell styling stacks the per-row cells
+                      // into one continuous-looking merged column.
+                      if (config.lunchAfter === p && lunch) {
                         cells.push(
-                          <td key="lunch" rowSpan={sheetRows.length - firstClassRowIdx} className="sheet-lunch-body">
+                          <td
+                            key="lunch"
+                            className={`sheet-lunch-cell ${lunchFirst ? "sheet-lunch-first" : ""} ${lunchLast ? "sheet-lunch-last" : ""}`}
+                          >
                             LUNCH
                           </td>,
                         );
@@ -431,7 +460,10 @@ export default function MasterRoutine() {
                 key={p}
                 type="button"
                 className={`chip !px-3 !py-1 ${progFilter === p ? "bg-primary text-white" : "bg-teal-100 text-teal-900"}`}
-                onClick={() => setProgFilter(p)}
+                onClick={() => {
+                  setProgFilter(p);
+                  setYearFilter(0); // a stale year (e.g. Year 4) must not hide the new programme
+                }}
               >
                 {p}
               </button>
@@ -444,7 +476,7 @@ export default function MasterRoutine() {
                 onChange={(e) => setYearFilter(Number(e.target.value))}
               >
                 <option value={0}>All years</option>
-                {[1, 2, 3, 4].map((y) => (
+                {yearOptions.map((y) => (
                   <option key={y} value={y}>Year {y}</option>
                 ))}
               </select>
