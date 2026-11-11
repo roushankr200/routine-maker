@@ -41,6 +41,15 @@ export interface CatalogueElectiveOption {
   shortCode: string;
   title: string;
   derived?: boolean;
+  /**
+   * Rare: a pool option that is itself a LAB (Mech Thermal's pool
+   * mixes theory and lab options). When set, the pick resolves with
+   * the option's own type/hours/credits instead of the slot's.
+   */
+  type?: "theory" | "lab";
+  weeklyHours?: number;
+  sessionHours?: number;
+  credits?: number;
 }
 
 export interface CatalogueSubject {
@@ -52,12 +61,18 @@ export interface CatalogueSubject {
   L: number;
   T: number;
   P: number;
-  credits: number;
+  /**
+   * Syllabus credits. NULL only where the source document publishes
+   * no numbers at all (Production B.Tech) — never an invented value;
+   * see the programme's `numbersRequired` flag.
+   */
+  credits: number | null;
   kind: CatalogueKind;
   timetabled: boolean;
   derived?: boolean;
-  weeklyHours: number;
-  sessionHours: number;
+  /** NULL under the same rule as `credits` (Production B.Tech). */
+  weeklyHours: number | null;
+  sessionHours: number | null;
   /** For kind === "elective": the options this slot is chosen from. */
   electivePool?: CatalogueElectiveOption[];
 }
@@ -77,6 +92,14 @@ export interface CatalogueProgramme {
   programme: string; // "B.Tech" | "MCA" | "M.Tech"
   /** M.Tech only: "Artificial Intelligence" | "Cyber Security" | "Data Science & Engineering". */
   specialisation?: string;
+  /**
+   * True when the source document publishes NO L/T/P or credits for
+   * this programme (Production B.Tech): catalogue subjects carry
+   * null numbers and the guided setup must collect weeklyHours /
+   * sessionHours / credits from the user per subject before the
+   * department can be created.
+   */
+  numbersRequired?: boolean;
   semesters: CatalogueSemester[];
 }
 
@@ -140,36 +163,81 @@ export interface ResolvedSubject {
   weeklyHours: number;
 }
 
+/** User-supplied numbers for a `numbersRequired` catalogue subject. */
+export interface SubjectNumbers {
+  weeklyHours: number;
+  sessionHours: number;
+  credits: number;
+}
+
 export function resolveSubject(
   subject: CatalogueSubject,
   electivePick?: string | null,
+  opts?: {
+    /** Required when the catalogue subject's numbers are null. */
+    numbers?: SubjectNumbers | null;
+    /**
+     * Free-text elective choice for slots whose syllabus prints NO
+     * pool (electivePool === []): the user names the chosen subject.
+     */
+    customPick?: { shortCode: string; title: string } | null;
+  },
 ): ResolvedSubject | null {
   if (!subject.timetabled) return null;
+  const numbers = opts?.numbers ?? null;
+  // Subjects from a numbersRequired programme resolve only with
+  // user-supplied numbers — the catalogue itself has none to give.
+  const base: SubjectNumbers | null =
+    subject.weeklyHours === null || subject.sessionHours === null || subject.credits === null
+      ? numbers
+      : {
+          weeklyHours: subject.weeklyHours,
+          sessionHours: subject.sessionHours,
+          credits: subject.credits,
+        };
+  if (!base) return null;
   if (subject.kind === "elective") {
     const pool = subject.electivePool ?? [];
     const pick = pool.find((o) => o.shortCode === electivePick);
-    if (!pick) return null;
-    return {
-      catalogueKey: subject.key,
-      shortCode: pick.shortCode,
-      title: pick.title,
-      syllabusCode: pick.syllabusCode,
-      credits: subject.credits,
-      type: "theory",
-      kind: subject.kind,
-      sessionHours: subject.sessionHours,
-      weeklyHours: subject.weeklyHours,
-    };
+    if (pick) {
+      return {
+        catalogueKey: subject.key,
+        shortCode: pick.shortCode,
+        title: pick.title,
+        syllabusCode: pick.syllabusCode,
+        credits: pick.credits ?? base.credits,
+        type: pick.type ?? "theory",
+        kind: subject.kind,
+        sessionHours: pick.sessionHours ?? base.sessionHours,
+        weeklyHours: pick.weeklyHours ?? base.weeklyHours,
+      };
+    }
+    // Empty pool: the syllabus names no options — accept the user's
+    // free-text pick instead.
+    if (pool.length === 0 && opts?.customPick) {
+      return {
+        catalogueKey: subject.key,
+        shortCode: opts.customPick.shortCode,
+        title: opts.customPick.title,
+        syllabusCode: null,
+        credits: base.credits,
+        type: "theory",
+        kind: subject.kind,
+        sessionHours: base.sessionHours,
+        weeklyHours: base.weeklyHours,
+      };
+    }
+    return null;
   }
   return {
     catalogueKey: subject.key,
     shortCode: subject.shortCode,
     title: subject.title,
     syllabusCode: subject.syllabusCode,
-    credits: subject.credits,
+    credits: base.credits,
     type: subject.kind === "lab" ? "lab" : "theory",
     kind: subject.kind,
-    sessionHours: subject.sessionHours,
-    weeklyHours: subject.weeklyHours,
+    sessionHours: base.sessionHours,
+    weeklyHours: base.weeklyHours,
   };
 }

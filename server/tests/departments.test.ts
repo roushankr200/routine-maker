@@ -28,43 +28,43 @@ async function req(method: string, path: string, body?: unknown) {
   return { status: res.status, json: json as never };
 }
 
-/** A small, feasible ECE department in the wizard's payload shape. */
+/**
+ * A small, feasible ECE department in the UNIFIED setup's payload
+ * shape (v2.4): the real ECE catalogue's B.Tech Sem 3 — 6 subjects,
+ * 29 timetabled hours (M3 3h, DSA 5h, STD 6h, ASAD 5h, NT 6h, SS 4h)
+ * — assigned to 4 manual teachers.
+ */
 const ECE_PAYLOAD = {
+  catalogueId: "ECE",
   department: {
     name: "Electronics and Communication Engineering",
     short: "ECE",
     session: "ODD 2026",
     effectiveFrom: "27/07/2026",
   },
-  classes: [
-    { program: "B.Tech", year: "5th", section: "A" },
-    { program: "B.Tech", year: "3rd", section: "A" },
-  ],
-  subjects: [
-    { name: "Digital Signal Processing", code: "DSP", type: "theory", sessionHours: 2 },
-    { name: "Microprocessors", code: "MPMC", type: "theory", sessionHours: 2 },
-    { name: "Engineering Mathematics", code: "EM", type: "theory", sessionHours: 2 },
-    { name: "DSP Laboratory", code: "DSPL", type: "lab", sessionHours: 3 },
-    { name: "Seminar", code: "SEM", type: "theory", sessionHours: 1 },
-  ],
   teachers: [
-    { name: "Dr. ECE One", code: "EO", designation: "Professor", maxPerDay: 5, weeklyHours: 20, subjects: ["DSP", "DSPL"], unavailableDay: null },
-    { name: "Dr. ECE Two", code: "ET", designation: "Associate Professor", maxPerDay: 5, weeklyHours: 20, subjects: ["MPMC", "DSP"], unavailableDay: null },
-    { name: "Dr. ECE Three", code: "EH", designation: "Assistant Professor", maxPerDay: 5, weeklyHours: 20, subjects: ["EM", "SEM"], unavailableDay: null },
-    { name: "Dr. ECE Four", code: "EF", designation: "Assistant Professor", maxPerDay: 5, weeklyHours: 20, subjects: ["DSPL", "MPMC", "SEM"], unavailableDay: null },
+    { name: "Dr. ECE One", code: "EO", designation: "Professor", maxPerDay: 5, weeklyHours: 30 },
+    { name: "Dr. ECE Two", code: "ET", designation: "Associate Professor", maxPerDay: 5, weeklyHours: 30 },
+    { name: "Dr. ECE Three", code: "EH", designation: "Assistant Professor", maxPerDay: 5, weeklyHours: 30 },
+    { name: "Dr. ECE Four", code: "EF", designation: "Assistant Professor", maxPerDay: 5, weeklyHours: 30 },
   ],
-  classSubjects: [
-    { classIndex: 0, subjectCode: "DSP", hours: 4 },
-    { classIndex: 0, subjectCode: "MPMC", hours: 4 },
-    { classIndex: 0, subjectCode: "EM", hours: 4 },
-    { classIndex: 0, subjectCode: "DSPL", hours: 3 },
-    { classIndex: 0, subjectCode: "SEM", hours: 1 },
-    { classIndex: 1, subjectCode: "DSP", hours: 4 },
-    { classIndex: 1, subjectCode: "EM", hours: 4 },
-    { classIndex: 1, subjectCode: "DSPL", hours: 3 },
+  classes: [
+    {
+      programme: "B.Tech",
+      semester: 3,
+      section: "",
+      assignments: [
+        { key: "M3", teacherCode: "EO" },
+        { key: "DSA", teacherCode: "ET" },
+        { key: "STD", teacherCode: "EO" },
+        { key: "ASAD1", teacherCode: "ET" },
+        { key: "NT2", teacherCode: "EH" },
+        { key: "SS", teacherCode: "EF" },
+      ],
+    },
   ],
 };
-const ECE_TOTAL_HOURS = ECE_PAYLOAD.classSubjects.reduce((s, m) => s + m.hours, 0); // 27
+const ECE_TOTAL_HOURS = 29;
 
 interface DeptRow {
   id: string;
@@ -122,8 +122,8 @@ describe("multi-department storage", () => {
     expect((routine.json as { config: { departmentShort: string } }).config.departmentShort).toBe("CSE");
   });
 
-  it("creating ECE via the wizard does NOT touch CSE (no wipe)", async () => {
-    const created = await req("POST", "/api/setup/department", ECE_PAYLOAD);
+  it("creating ECE via the unified setup does NOT touch CSE (no wipe)", async () => {
+    const created = await req("POST", "/api/setup/guided", ECE_PAYLOAD);
     expect(created.status).toBe(201);
     eceId = (created.json as { departmentId: string }).departmentId;
     expect(eceId).toBeTruthy();
@@ -134,7 +134,7 @@ describe("multi-department storage", () => {
     const ece = depts.find((d) => d.id === eceId)!;
     // CSE fully intact — including its generated routine.
     expect(cse.counts).toMatchObject({ teachers: 42, subjects: 69, classes: 14, entries: 346 });
-    expect(ece.counts).toMatchObject({ teachers: 4, subjects: 5, classes: 2 });
+    expect(ece.counts).toMatchObject({ teachers: 4, subjects: 6, classes: 1 });
     // The new department becomes active.
     expect(ece.isActive).toBe(true);
     expect(cse.isActive).toBe(false);
@@ -171,14 +171,14 @@ describe("multi-department storage", () => {
     const depts = await departments();
     expect(depts).toHaveLength(2);
     const ece = depts.find((d) => d.id === eceId)!;
-    expect(ece.counts).toMatchObject({ teachers: 4, subjects: 5, classes: 2, entries: ECE_TOTAL_HOURS });
+    expect(ece.counts).toMatchObject({ teachers: 4, subjects: 6, classes: 1, entries: ECE_TOTAL_HOURS });
     const cse = depts.find((d) => d.id === cseId)!;
     expect(cse.id).toBe(cseId); // same department, refreshed in place
     expect(cse.isActive).toBe(true);
   });
 
   it("duplicate department name -> 409 with the existing department id", async () => {
-    const dup = await req("POST", "/api/setup/department", {
+    const dup = await req("POST", "/api/setup/guided", {
       ...ECE_PAYLOAD,
       department: { ...ECE_PAYLOAD.department, name: "electronics and communication engineering" },
     });

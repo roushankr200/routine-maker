@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { BookOpen, Database, Play, Trash2, Wand2 } from "lucide-react";
+import { BookOpen, Database, Play, Trash2 } from "lucide-react";
 import {
   activateDepartment,
   clearRoutine,
@@ -78,11 +78,8 @@ export default function Dashboard() {
         <button className="btn-ghost" onClick={() => seed.mutate()} disabled={seed.isPending}>
           <Database className="h-4 w-4" aria-hidden /> Load NIT Agartala CSE Data
         </button>
-        <Link className="btn-ghost" to="/setup/guided">
-          <BookOpen className="h-4 w-4" aria-hidden /> Set up from syllabus (guided)
-        </Link>
-        <Link className="btn-ghost" to="/setup/wizard">
-          <Wand2 className="h-4 w-4" aria-hidden /> Set up a new department
+        <Link className="btn-ghost" to="/setup">
+          <BookOpen className="h-4 w-4" aria-hidden /> Set up a department
         </Link>
         <button className="btn-accent" onClick={() => generate.mutate()} disabled={generate.isPending}>
           <Play className="h-4 w-4" aria-hidden /> Generate Routine
@@ -134,7 +131,7 @@ export default function Dashboard() {
           </p>
           {deptData.departments.length === 0 ? (
             <p className="text-sm text-muted">
-              No departments yet — load the built-in CSE department or create one with the wizard.
+              No departments yet — load the built-in CSE department or set one up.
             </p>
           ) : (
             <ul className="grid gap-2">
@@ -208,25 +205,19 @@ export default function Dashboard() {
           <li>Try a manual Move on the master view — illegal moves are rejected with the rule broken.</li>
         </ol>
         <p className="mb-2 mt-4 text-sm">
-          <strong>Path B — set up from the syllabus (guided)</strong>:{" "}
-          <Link className="font-medium text-primary-dark underline" to="/setup/guided">
-            open the guided setup
+          <strong>Path B — set up any NITA department</strong>:{" "}
+          <Link className="font-medium text-primary-dark underline" to="/setup">
+            open the setup
           </Link>
-          . Subjects are preloaded from the official syllabus catalogue (codes, hours,
-          credits) — you pick the programmes and session, then assign each semester's
+          . Pick the department from the dropdown — its teachers preload from nita.ac.in
+          and, where NITA publishes a course structure, its subjects preload from the
+          official syllabus catalogue (codes, hours, credits). You assign each semester's
           subjects to teachers, semester by semester; Generate unlocks when everything
           is assigned (subjects with no teacher yet are marked XX, like the real sheet).
-        </p>
-        <p className="mb-2 mt-4 text-sm">
-          <strong>Path C — any other NITA department</strong> (ECE, Civil, ME, …):{" "}
-          <Link className="font-medium text-primary-dark underline" to="/setup/wizard">
-            open the setup wizard
-          </Link>
-          . The institute and the time grid never change — the wizard only asks the
-          department's name, how many classes, courses and teachers it has, and the weekly
-          hours per class; then the same rule engine generates its routine in the same
-          master format. Creating a department ADDS it alongside your existing ones —
-          nothing is ever replaced or deleted.
+          Departments without a published structure (Chemistry, Physics, Maths, MHSS,
+          Education) preload their faculty and take their courses by hand in the same
+          setup. Creating a department ADDS it alongside your existing ones — nothing
+          is ever replaced or deleted.
         </p>
       </div>
     </div>

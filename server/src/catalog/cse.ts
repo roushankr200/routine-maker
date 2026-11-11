@@ -17,69 +17,9 @@
 import {
   CatalogueDepartment,
   CatalogueElectiveOption,
-  CatalogueKind,
-  CatalogueSubject,
 } from "./types.js";
-
-interface RawSub {
-  code: string;
-  title: string;
-  ltp: [number, number, number];
-  credits: number;
-  kind?: CatalogueKind;
-  syllabusCode?: string | null;
-  derived?: boolean;
-  timetabled?: boolean;
-  pool?: CatalogueElectiveOption[];
-}
-
-function sessionHoursFor(kind: CatalogueKind, weekly: number, P: number): number {
-  if (kind === "lab") return P >= 3 ? 3 : 2;
-  if (kind === "seminar") return weekly;
-  return 2;
-}
-
-function sub(raw: RawSub): CatalogueSubject {
-  const [L, T, P] = raw.ltp;
-  const kind: CatalogueKind =
-    raw.kind ?? (L === 0 && T === 0 && P > 0 ? "lab" : "theory");
-  const timetabled = raw.timetabled ?? true;
-  const weeklyHours = timetabled ? L + T + P : 0;
-  return {
-    key: raw.code,
-    syllabusCode: raw.syllabusCode ?? null,
-    shortCode: raw.code,
-    title: raw.title,
-    L,
-    T,
-    P,
-    credits: raw.credits,
-    kind,
-    timetabled,
-    ...(raw.derived ? { derived: true } : {}),
-    weeklyHours,
-    sessionHours: timetabled ? sessionHoursFor(kind, weeklyHours, P) : 0,
-    ...(raw.pool ? { electivePool: raw.pool } : {}),
-  };
-}
-
-function elective(
-  slot: string,
-  ltp: [number, number, number],
-  credits: number,
-  pool: CatalogueElectiveOption[],
-): CatalogueSubject {
-  return sub({ code: slot, title: slot, ltp, credits, kind: "elective", pool });
-}
-
-function opt(
-  shortCode: string,
-  title: string,
-  syllabusCode: string | null,
-  derived = false,
-): CatalogueElectiveOption {
-  return { syllabusCode, shortCode, title, ...(derived ? { derived: true } : {}) };
-}
+import { elective, opt, sub } from "./build.js";
+import { FIRST_YEAR_SEMESTERS } from "./firstYear.js";
 
 // ------------------------------------------------------------ elective pools
 const BTECH_E1: CatalogueElectiveOption[] = [
@@ -168,64 +108,10 @@ const MTECH_DSE_POOL: CatalogueElectiveOption[] = [
   opt("IR", "Information Retrieval", null, true),
 ];
 
-// ------------------------------------------------------------------- B.Tech
-// Sem 1-2: the common first-year syllabus prints NO codes in its
-// structure tables; short codes are derived (only 4 syllabus codes
-// could be verified from the document's detailed sections).
-const BT_S1_G1 = [
-  sub({ code: "EM1", title: "Engineering Mathematics-I", ltp: [2, 1, 0], credits: 3, derived: true }),
-  sub({ code: "PHY1", title: "Engineering Physics-I", ltp: [2, 1, 0], credits: 3, syllabusCode: "UPH11B07", derived: true }),
-  sub({ code: "CHE1", title: "Engineering Chemistry-I", ltp: [3, 0, 0], credits: 3, syllabusCode: "UCY11B10", derived: true }),
-  sub({ code: "BEE", title: "Basic Electrical Engineering", ltp: [3, 0, 0], credits: 3, derived: true }),
-  sub({ code: "ENGM", title: "Engineering Mechanics", ltp: [3, 1, 0], credits: 4, derived: true }),
-  sub({ code: "PCE", title: "Language (Professional Communication in English)", ltp: [3, 0, 0], credits: 3, derived: true }),
-  sub({ code: "CHE Lab", title: "Engineering Chemistry Lab", ltp: [0, 0, 2], credits: 1, derived: true }),
-  sub({ code: "WS", title: "Workshop Practice", ltp: [0, 0, 2], credits: 1, derived: true }),
-  sub({ code: "BEE Lab", title: "Basic Electrical Engineering Lab", ltp: [0, 0, 2], credits: 1, derived: true }),
-  sub({ code: "NSS", title: "NSS/NCC", ltp: [0, 0, 3], credits: 0, kind: "other", timetabled: false, derived: true }),
-];
-const BT_S1_G2 = [
-  sub({ code: "EM1", title: "Engineering Mathematics-I", ltp: [2, 1, 0], credits: 3, derived: true }),
-  sub({ code: "PHY1", title: "Engineering Physics-I", ltp: [2, 1, 0], credits: 3, syllabusCode: "UPH11B07", derived: true }),
-  sub({ code: "CHE1", title: "Engineering Chemistry-I", ltp: [3, 0, 0], credits: 3, syllabusCode: "UCY11B10", derived: true }),
-  sub({ code: "BE", title: "Basic Electronics", ltp: [3, 0, 0], credits: 3, derived: true }),
-  sub({ code: "DISM", title: "Disaster Management", ltp: [2, 0, 0], credits: 2, derived: true }),
-  sub({ code: "ITP", title: "Introduction to Programming", ltp: [3, 0, 0], credits: 3, derived: true }),
-  sub({ code: "PHY Lab", title: "Engineering Physics Lab", ltp: [0, 0, 2], credits: 1, syllabusCode: "UPH12P06", derived: true }),
-  sub({ code: "EG", title: "Engineering Graphics", ltp: [1, 0, 2], credits: 2, derived: true }),
-  sub({ code: "ITP Lab", title: "Computer Programming Lab", ltp: [0, 0, 2], credits: 1, derived: true }),
-  sub({ code: "BE Lab", title: "Basic Electronics Lab", ltp: [0, 0, 2], credits: 1, derived: true }),
-  sub({ code: "NSS", title: "NSS/NCC", ltp: [0, 0, 3], credits: 0, kind: "other", timetabled: false, derived: true }),
-];
-const BT_S2_G1 = [
-  sub({ code: "EM2", title: "Engineering Mathematics-II", ltp: [2, 1, 0], credits: 3, derived: true }),
-  sub({ code: "PHY2", title: "Engineering Physics-II", ltp: [2, 1, 0], credits: 3, syllabusCode: "UPH12B09", derived: true }),
-  sub({ code: "CHE2", title: "Engineering Chemistry-II", ltp: [2, 0, 0], credits: 2, derived: true }),
-  sub({ code: "BE", title: "Basic Electronics", ltp: [3, 0, 0], credits: 3, derived: true }),
-  sub({ code: "DISM", title: "Disaster Management", ltp: [2, 0, 0], credits: 2, derived: true }),
-  sub({ code: "ITP", title: "Introduction to Programming", ltp: [3, 0, 0], credits: 3, derived: true }),
-  sub({ code: "PHY Lab", title: "Engineering Physics Lab", ltp: [0, 0, 2], credits: 1, syllabusCode: "UPH12P06", derived: true }),
-  sub({ code: "EG", title: "Engineering Graphics", ltp: [1, 0, 2], credits: 2, derived: true }),
-  sub({ code: "ITP Lab", title: "Computer Programming Lab", ltp: [0, 0, 2], credits: 1, derived: true }),
-  sub({ code: "BE Lab", title: "Basic Electronics Lab", ltp: [0, 0, 2], credits: 1, derived: true }),
-];
-const BT_S2_G2 = [
-  sub({ code: "EM2", title: "Engineering Mathematics-II", ltp: [2, 1, 0], credits: 3, derived: true }),
-  sub({ code: "PHY2", title: "Engineering Physics-II", ltp: [2, 1, 0], credits: 3, syllabusCode: "UPH12B09", derived: true }),
-  sub({ code: "CHE2", title: "Engineering Chemistry-II", ltp: [2, 0, 0], credits: 2, derived: true }),
-  sub({ code: "BEE", title: "Basic Electrical Engineering", ltp: [3, 0, 0], credits: 3, derived: true }),
-  sub({ code: "ENGM", title: "Engineering Mechanics", ltp: [3, 1, 0], credits: 4, derived: true }),
-  sub({ code: "PCE", title: "Language (Professional Communication in English)", ltp: [3, 0, 0], credits: 3, derived: true }),
-  sub({ code: "CHE Lab", title: "Engineering Chemistry Lab", ltp: [0, 0, 2], credits: 1, derived: true }),
-  sub({ code: "WS", title: "Workshop Practice", ltp: [0, 0, 2], credits: 1, derived: true }),
-  sub({ code: "BEE Lab", title: "Basic Electrical Engineering Lab", ltp: [0, 0, 2], credits: 1, derived: true }),
-];
-
 const BTECH = {
   programme: "B.Tech",
   semesters: [
-    { semester: 1, groups: { I: BT_S1_G1, II: BT_S1_G2 } },
-    { semester: 2, groups: { I: BT_S2_G1, II: BT_S2_G2 } },
+    ...FIRST_YEAR_SEMESTERS,
     {
       semester: 3,
       subjects: [

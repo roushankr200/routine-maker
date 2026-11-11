@@ -169,15 +169,17 @@ describe("catalog API", () => {
     server?.close();
   });
 
-  it("GET /api/catalog lists CSE with its 5 programmes", async () => {
+  it("GET /api/catalog lists all 9 catalogued departments; CSE keeps its 5 programmes", async () => {
     const res = await fetch(`${base}/api/catalog`);
     expect(res.status).toBe(200);
     const json = (await res.json()) as {
       departments: Array<{ id: string; programmes: unknown[] }>;
     };
-    expect(json.departments).toHaveLength(1);
-    expect(json.departments[0].id).toBe("CSE");
-    expect(json.departments[0].programmes).toHaveLength(5);
+    expect(json.departments.map((d) => d.id).sort()).toEqual([
+      "BIO", "CHEMICAL", "CIVIL", "CSE", "ECE", "EE", "EIE", "MECH", "PROD",
+    ]);
+    const cse = json.departments.find((d) => d.id === "CSE")!;
+    expect(cse.programmes).toHaveLength(5);
   });
 
   it("GET /api/catalog/CSE returns the full tree; unknown id -> 404", async () => {

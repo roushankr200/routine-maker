@@ -89,12 +89,13 @@ export interface CatalogueSubject {
   L: number;
   T: number;
   P: number;
-  credits: number;
+  /** Null = the syllabus publishes no numbers (Production B.Tech). */
+  credits: number | null;
   kind: CatalogueKind;
   timetabled: boolean;
   derived?: boolean;
-  weeklyHours: number;
-  sessionHours: number;
+  weeklyHours: number | null;
+  sessionHours: number | null;
   electivePool?: CatalogueElectiveOption[];
 }
 
@@ -107,6 +108,8 @@ export interface CatalogueSemester {
 export interface CatalogueProgramme {
   programme: string;
   specialisation?: string;
+  /** True when the syllabus publishes no L/T/P/credits (Production). */
+  numbersRequired?: boolean;
   semesters: CatalogueSemester[];
 }
 
@@ -122,16 +125,55 @@ export interface CatalogListResponse {
     id: string;
     name: string;
     shortName: string;
-    programmes: Array<{ programme: string; specialisation?: string; semesters: number[] }>;
+    programmes: Array<{
+      programme: string;
+      specialisation?: string;
+      numbersRequired?: boolean;
+      semesters: number[];
+    }>;
   }>;
 }
 
-/** POST /api/setup/guided payload — decisions only; the server re-resolves subjects from the catalogue. */
+// ---------------------------------------------------- faculty registry
+/** One of the 14 NITA units in GET /api/faculty. */
+export interface RegistryDepartment {
+  id: string;
+  name: string;
+  shortName: string;
+  hasCatalogue: boolean;
+  facultyCount: number;
+}
+
+export interface FacultyMember {
+  name: string;
+  designation: string;
+  /** Derived short code (initials; collisions get digits). */
+  code: string;
+}
+
+export interface FacultyDeptResponse extends RegistryDepartment {
+  faculty: FacultyMember[];
+}
+
+/** A manually added subject in the unified setup payload. */
+export interface CustomSubjectPayload {
+  shortCode: string;
+  title: string;
+  kind: "theory" | "lab" | "seminar";
+  weeklyHours: number;
+  sessionHours: number;
+  credits: number;
+}
+
+/** POST /api/setup/guided payload — the ONE unified setup (v2.4). */
 export interface GuidedSetupPayload {
-  catalogueId: string;
+  catalogueId?: string;
+  facultyDeptId?: string;
   department: { name: string; short: string; session: string; effectiveFrom: string };
   teachers: Array<{
-    name: string;
+    /** Website faculty code — the server re-resolves name/designation. */
+    facultyCode?: string;
+    name?: string;
     code: string;
     designation?: string;
     maxPerDay?: number;
@@ -143,7 +185,20 @@ export interface GuidedSetupPayload {
     semester: number;
     section: string;
     group?: "I" | "II";
-    assignments: Array<{ key: string; teacherCode: string; electivePick?: string }>;
+    /** True = manual class (no catalogue); subjects are all custom. */
+    custom?: boolean;
+    customSubjects?: CustomSubjectPayload[];
+    assignments: Array<{
+      key: string;
+      teacherCode: string;
+      electivePick?: string;
+      /** For elective slots whose syllabus prints no pool. */
+      customPick?: { shortCode: string; title: string };
+      /** Required for subjects whose syllabus prints no numbers. */
+      weeklyHours?: number;
+      sessionHours?: number;
+      credits?: number;
+    }>;
   }>;
 }
 
@@ -201,41 +256,7 @@ export interface DashboardData {
   config: ScheduleConfig;
 }
 
-/** Payload of the New Department wizard (POST /api/setup/department). */
-export interface WizardPayload {
-  department: { name: string; short: string; session: string; effectiveFrom: string };
-  classes: Array<{ program: string; year: string; section: string }>;
-  subjects: Array<{ name: string; code: string; type: "theory" | "lab"; sessionHours: number }>;
-  teachers: Array<{
-    name: string;
-    code: string;
-    designation: string;
-    maxPerDay: number;
-    weeklyHours: number;
-    /** Course CODES this teacher can teach. */
-    subjects: string[];
-    unavailableDay: string | null;
-  }>;
-  classSubjects: Array<{ classIndex: number; subjectCode: string; hours: number }>;
-}
 
-export interface DepartmentSetupResult {
-  message: string;
-  departmentId?: string;
-  counts: { teachers: number; subjects: number; classes: number; classSubjects: number };
-  validation: {
-    issues: string[];
-    warnings: string[];
-    slotsPerWeek: number;
-    demandBySubject: Array<{
-      subject: string;
-      demand: number;
-      capacity: number;
-      teachers: string[];
-    }>;
-    demandByClass: Array<{ className: string; total: number }>;
-  };
-}
 
 /** Coverage & balance report (GET /api/balance, POST /api/balance/preview). */
 export type TeacherLoadStatus = "under" | "full" | "balanced";
@@ -264,9 +285,6 @@ export interface BalanceReport {
   totals: { requiredHours: number; assignedHours: number; remainingHours: number };
   averageSuggestedHours: number;
 }
-
-/** Wizard state sent to POST /api/balance/preview (WizardPayload minus department). */
-export type BalancePreviewPayload = Omit<WizardPayload, "department">;
 
 export interface ValidationData {
   issues: string[];

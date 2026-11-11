@@ -17,7 +17,7 @@ const links = [
   { to: "/teachers", label: "Teachers", icon: Users },
   { to: "/subjects", label: "Subjects", icon: BookOpen },
   { to: "/classes", label: "Classes", icon: GraduationCap },
-  { to: "/setup", label: "Setup", icon: Settings2 },
+  { to: "/setup", label: "Set up department", icon: Settings2 },
   { to: "/routine", label: "Master Routine", icon: CalendarRange },
   { to: "/routine/by-class", label: "By Class", icon: GraduationCap },
   { to: "/routine/by-teacher", label: "By Teacher", icon: UserRound },
@@ -45,7 +45,7 @@ export default function Layout() {
         onChange={async (e) => {
           const id = e.target.value;
           if (id === "__new__") {
-            navigate("/setup/wizard");
+            navigate("/setup");
             return;
           }
           if (!id || id === active?.id) return;

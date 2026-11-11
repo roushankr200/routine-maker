@@ -27,7 +27,6 @@ import {
   classSchema,
   classSubjectSchema,
   configSchema,
-  departmentSetupSchema,
   guidedSetupSchema,
   moveSchema,
   subjectSchema,
@@ -35,6 +34,9 @@ import {
   teacherSchema,
 } from "./schemas.js";
 import {
+  DEPARTMENT_REGISTRY,
+  facultyWithCodes,
+  findFaculty,
   findProgramme,
   findSemester,
   getCatalogue,
@@ -47,13 +49,7 @@ import {
   BalanceInput,
   BalanceReport,
 } from "./solver/balance.js";
-import { loadSolverData, validateData, SolverDataset } from "./data.js";
-import {
-  SubjectData,
-  TeacherData,
-  defaultSessionHours,
-  unavailableKey,
-} from "./solver/types.js";
+import { loadSolverData, validateData } from "./data.js";
 import { solve } from "./solver/solver.js";
 import { loadDemoData } from "./seed.js";
 import { classLabel, parseSemesterNumber } from "./demoData.js";
@@ -89,7 +85,7 @@ async function requireActiveDept(res: Response): Promise<string | null> {
   const id = await activeDeptId();
   if (!id) {
     res.status(400).json({
-      error: "No active department yet — load the CSE department or create one with the setup wizard first.",
+      error: "No active department yet — load the CSE department or set up a department first.",
     });
     return null;
   }
@@ -205,265 +201,6 @@ router.post(
   }),
 );
 
-// ------------------------------------------------- new department wizard
-/**
- * POST /api/setup/department — the wizard's single commit endpoint.
- *
- * The whole payload is validated FIRST (Zod shape, then cross-reference
- * and duplicate checks, then the same pre-flight validation the
- * Validation page uses). A bad payload changes nothing.
- *
- * MULTI-DEPARTMENT: nothing is ever wiped. On success a NEW Department
- * is created with its own scoped data and made active; every existing
- * department keeps its data untouched. If a department with the same
- * name already exists, the route answers 409 with its id so the UI
- * can offer switching to it instead.
- * The institute (NIT Agartala) and the time grid are product constants
- * and are not part of this payload.
- */
-router.post(
-  "/setup/department",
-  wrap(async (req, res) => {
-    const raw = parse(departmentSetupSchema, req.body, res);
-    if (!raw) return;
-
-    // Normalise Zod defaults into concrete locals (the wizard always
-    // sends every field; defaults only guard partial API callers).
-    const body = {
-      department: {
-        name: raw.department.name,
-        short: raw.department.short,
-        session: raw.department.session ?? "ODD 2026",
-        effectiveFrom: raw.department.effectiveFrom ?? "",
-      },
-      classes: raw.classes.map((c) => ({ ...c, section: c.section ?? "" })),
-      subjects: raw.subjects,
-      teachers: raw.teachers.map((t) => ({
-        ...t,
-        code: t.code ?? "",
-        designation: t.designation ?? "",
-        subjects: t.subjects ?? [],
-        unavailableDay: t.unavailableDay ?? null,
-      })),
-      classSubjects: raw.classSubjects ?? [],
-    };
-
-    const problems: string[] = [];
-
-    // -- duplicate + cross-reference checks (payload-internal) --------
-    const subjectCodes = new Map<string, number>(); // upper-cased code -> index
-    body.subjects.forEach((s, i) => {
-      const key = s.code.toUpperCase();
-      if (subjectCodes.has(key)) problems.push(`Duplicate course code "${s.code}" (Step 3).`);
-      else subjectCodes.set(key, i);
-    });
-    const classKeys = new Set<string>();
-    body.classes.forEach((c) => {
-      const key = `${c.program}|${c.year}|${c.section}`.toLowerCase();
-      if (classKeys.has(key))
-        problems.push(`Duplicate class "${classLabel(c.program, c.year, c.section)}" (Step 2).`);
-      classKeys.add(key);
-    });
-    const teacherCodes = new Map<string, string>(); // upper-cased code -> name
-    body.teachers.forEach((t) => {
-      if (t.code) {
-        const key = t.code.toUpperCase();
-        if (teacherCodes.has(key))
-          problems.push(
-            `Faculty code "${t.code}" is used by both ${teacherCodes.get(key)} and ${t.name} (Step 4).`,
-          );
-        else teacherCodes.set(key, t.name);
-      }
-      for (const code of t.subjects) {
-        if (!subjectCodes.has(code.toUpperCase()))
-          problems.push(`Teacher ${t.name} can teach "${code}", which is not one of the Step 3 courses.`);
-      }
-    });
-    const mappingSeen = new Set<string>();
-    for (const m of body.classSubjects) {
-      if (m.classIndex >= body.classes.length) {
-        problems.push(`Mapping refers to class #${m.classIndex + 1}, which does not exist.`);
-        continue;
-      }
-      if (!subjectCodes.has(m.subjectCode.toUpperCase())) {
-        problems.push(`Mapping refers to course "${m.subjectCode}", which is not one of the Step 3 courses.`);
-        continue;
-      }
-      const key = `${m.classIndex}|${m.subjectCode.toUpperCase()}`;
-      if (mappingSeen.has(key)) problems.push(`Duplicate mapping entry for course "${m.subjectCode}".`);
-      mappingSeen.add(key);
-    }
-    if (problems.length) {
-      return void res.status(400).json({ error: "Department setup has problems", problems });
-    }
-
-    // -- pre-flight validation on a synthetic dataset (nothing wiped) -
-    const cfg = await getOrCreateConfig();
-    const synthTeachers = new Map<string, TeacherData>();
-    body.teachers.forEach((t, i) => {
-      const id = `t${i}`;
-      synthTeachers.set(id, {
-        id,
-        name: t.name,
-        maxPerDay: t.maxPerDay,
-        weeklyHours: t.weeklyHours,
-        subjects: new Set(t.subjects.map((c) => `s${subjectCodes.get(c.toUpperCase())}`)),
-        unavailable: t.unavailableDay
-          ? new Set([unavailableKey(t.unavailableDay, null)])
-          : new Set<string>(),
-      });
-    });
-    const synthSubjects = new Map<string, SubjectData>();
-    body.subjects.forEach((s, i) => {
-      const id = `s${i}`;
-      synthSubjects.set(id, {
-        id,
-        name: s.name,
-        code: s.code,
-        type: s.type,
-        sessionHours: s.sessionHours ?? defaultSessionHours(s.type),
-      });
-    });
-    const synthDataset: SolverDataset = {
-      teachers: synthTeachers,
-      subjects: synthSubjects,
-      classSubjects: body.classSubjects
-        .filter((m) => m.hours > 0)
-        .map((m) => ({
-          classId: `c${m.classIndex}`,
-          subjectId: `s${subjectCodes.get(m.subjectCode.toUpperCase())}`,
-          hours: m.hours,
-        })),
-      config: {
-        days: cfg.days,
-        periodsPerDay: cfg.periodsPerDay,
-        lunchAfter: cfg.lunchAfter ?? null,
-        periodDuration: cfg.periodDuration,
-        startTime: cfg.startTime,
-        session: body.department.session,
-        effectiveFrom: body.department.effectiveFrom,
-        department: body.department.name,
-        departmentShort: body.department.short,
-      },
-      classNames: new Map(
-        body.classes.map((c, i) => [`c${i}`, classLabel(c.program, c.year, c.section)]),
-      ),
-    };
-    const report = validateData(synthDataset);
-
-    // -- duplicate department name? Never overwrite: 409 + switch hint -
-    const existingDept = await findDepartmentByName(body.department.name);
-    if (existingDept) {
-      return void res.status(409).json({
-        error: "Department already exists",
-        departmentId: existingDept._id.toString(),
-        department: {
-          id: existingDept._id.toString(),
-          name: existingDept.name,
-          shortName: existingDept.shortName,
-        },
-      });
-    }
-
-    // -- create the NEW department + its scoped data (nothing wiped) ---
-    const dept = await Department.create({
-      name: body.department.name,
-      shortName: body.department.short,
-      session: body.department.session,
-      effectiveFrom: body.department.effectiveFrom,
-    });
-    const deptFilter = scope(dept._id.toString());
-
-    const subjectIdByCode = new Map<string, string>();
-    for (const s of body.subjects) {
-      const doc = await Subject.create({
-        ...deptFilter,
-        name: s.name,
-        code: s.code,
-        type: s.type,
-        sessionHours: s.sessionHours ?? defaultSessionHours(s.type),
-      });
-      subjectIdByCode.set(s.code.toUpperCase(), doc._id.toString());
-    }
-
-    const classIds: string[] = [];
-    for (const c of body.classes) {
-      const doc = await ClassSection.create({
-        ...deptFilter,
-        program: c.program,
-        year: c.year,
-        section: c.section,
-        programme: c.programme ?? c.program,
-        semesterNumber: c.semesterNumber ?? parseSemesterNumber(c.year),
-      });
-      classIds.push(doc._id.toString());
-    }
-
-    for (const t of body.teachers) {
-      const doc = await Teacher.create({
-        ...deptFilter,
-        name: t.name,
-        code: t.code,
-        designation: t.designation,
-        maxPerDay: t.maxPerDay,
-        weeklyHours: t.weeklyHours,
-        subjects: t.subjects.map((code) => subjectIdByCode.get(code.toUpperCase())),
-      });
-      if (t.unavailableDay) {
-        await TeacherUnavailable.create({
-          ...deptFilter,
-          teacherId: doc._id,
-          day: t.unavailableDay,
-          period: null,
-        });
-      }
-    }
-
-    let mappings = 0;
-    for (const m of body.classSubjects) {
-      if (m.hours <= 0) continue;
-      await ClassSubject.create({
-        ...deptFilter,
-        classId: classIds[m.classIndex],
-        subjectId: subjectIdByCode.get(m.subjectCode.toUpperCase()),
-        hours: m.hours,
-      });
-      mappings++;
-    }
-
-    await setActiveDepartment(dept._id);
-
-    res.status(201).json({
-      message:
-        `${body.department.short} department created alongside your existing departments (nothing was deleted): ${body.classes.length} classes, ` +
-        `${body.subjects.length} courses, ${body.teachers.length} teachers, ${mappings} class-course mappings. ` +
-        `It is now the active department — click Generate Routine.`,
-      departmentId: dept._id.toString(),
-      counts: {
-        teachers: body.teachers.length,
-        subjects: body.subjects.length,
-        classes: body.classes.length,
-        classSubjects: mappings,
-      },
-      validation: {
-        issues: report.issues,
-        warnings: report.warnings,
-        slotsPerWeek: report.slotsPerWeek,
-        demandBySubject: report.demandBySubject.map((d) => ({
-          subject: `${d.subject.code} — ${d.subject.name}`,
-          demand: d.demand,
-          capacity: d.capacity,
-          teachers: d.teachers,
-        })),
-        demandByClass: report.demandByClass.map((d) => ({
-          className: d.className,
-          total: d.total,
-        })),
-      },
-    });
-  }),
-);
-
 // ------------------------------------------------------- syllabus catalogue
 /**
  * The syllabus catalogue: official course structures the guided setup
@@ -480,6 +217,7 @@ router.get(
         programmes: d.programmes.map((p) => ({
           programme: p.programme,
           ...(p.specialisation ? { specialisation: p.specialisation } : {}),
+          ...(p.numbersRequired ? { numbersRequired: true } : {}),
           semesters: p.semesters.map((s) => s.semester),
         })),
       })),
@@ -496,30 +234,85 @@ router.get(
   }),
 );
 
-// ------------------------------------------------------------ guided setup
+// --------------------------------------------------- faculty + departments
 /**
- * POST /api/setup/guided — the syllabus-guided setup's single commit.
+ * GET /api/faculty — the department registry (all 14 NITA units):
+ * which have a syllabus catalogue to preload courses from and how
+ * many teachers their website faculty list carries.
+ */
+router.get(
+  "/faculty",
+  wrap(async (_req, res) => {
+    res.json({
+      departments: DEPARTMENT_REGISTRY.map((d) => ({
+        id: d.id,
+        name: d.name,
+        shortName: d.shortName,
+        hasCatalogue: d.hasCatalogue,
+        facultyCount: d.facultyCount,
+      })),
+    });
+  }),
+);
+
+/**
+ * GET /api/faculty/:deptId — one department's website faculty list,
+ * each person with their derived short code (used by the setup's
+ * preload). Education has no website presence: an empty list.
+ */
+router.get(
+  "/faculty/:deptId",
+  wrap(async (req, res) => {
+    const entry = DEPARTMENT_REGISTRY.find(
+      (d) => d.id === req.params.deptId.toUpperCase(),
+    );
+    if (!entry) return void res.status(404).json({ error: "Department not found." });
+    res.json({
+      id: entry.id,
+      name: entry.name,
+      shortName: entry.shortName,
+      hasCatalogue: entry.hasCatalogue,
+      facultyCount: entry.facultyCount,
+      faculty: facultyWithCodes(entry.id) ?? [],
+    });
+  }),
+);
+
+// ------------------------------------------------------------ unified setup
+/**
+ * POST /api/setup/guided — the ONE department setup's single commit
+ * (v2.4; the route name is kept from v2.3 for compatibility).
  *
- * The payload carries DECISIONS only (teacher pool + per-class teacher
- * / elective-pick assignments keyed by catalogue subject key); every
- * subject's hours, credits and session length are re-resolved from
- * the server-side CATALOGUE, never trusted from the client.
+ * The payload carries DECISIONS (teacher pool + per-class teacher /
+ * elective-pick assignments keyed by subject key); catalogue subjects'
+ * hours, credits and session lengths are re-resolved from the
+ * server-side CATALOGUE, never trusted from the client. On top of the
+ * v2.3 flow it supports:
+ *  - catalogue for ANY NITA department (or none: manual departments)
+ *  - website faculty preload: a teacher may carry a `facultyCode`;
+ *    the server re-resolves name/designation from the faculty
+ *    registry — client-sent names for preloaded teachers are ignored
+ *  - per-class `customSubjects` (manually added subjects) alongside
+ *    catalogue subjects, and `custom: true` classes (all-manual)
+ *  - per-assignment numbers for catalogue subjects whose syllabus
+ *    prints none (Production B.Tech): required there, else 400
+ *  - `customPick` for elective slots the syllabus prints no pool for
  *
  * Validation (all before anything is written):
- *  - every class must exist in the catalogue (programme/semester/group)
- *  - every TIMETABLED catalogue subject of every class is assigned
- *    (a teacher from the pool, or "XX" = no teacher yet)
- *  - elective slots carry a valid pool pick
+ *  - every catalogue class must exist in the catalogue
+ *  - every TIMETABLED subject of every class is assigned (a teacher
+ *    from the pool, or "XX" = no teacher yet)
+ *  - elective slots carry a valid pool pick / custom pick
  *  - no teacher's total assigned hours exceed their weekly max
  *  - duplicate department name -> 409 (multi-department semantics:
  *    creating NEVER deletes or overwrites another department)
  *
  * On success a NEW department is created with Teachers (eligibility =
- * exactly the subjects each teacher was assigned), Subjects (from the
- * catalogue), ClassSections and ClassSubjects, and made active. XX
- * subjects are assigned to one internal placeholder teacher with code
- * "XX" (hidden from teacher lists/counts) so generation succeeds and
- * the slots print as XX, exactly like the real sheet.
+ * exactly the subjects each teacher was assigned), Subjects,
+ * ClassSections and ClassSubjects, and made active. XX subjects are
+ * assigned to one internal placeholder teacher with code "XX" (hidden
+ * from teacher lists/counts) so generation succeeds and the slots
+ * print as XX, exactly like the real sheet.
  */
 router.post(
   "/setup/guided",
@@ -527,8 +320,8 @@ router.post(
     const body = parse(guidedSetupSchema, req.body, res);
     if (!body) return;
 
-    const catalogue = getCatalogue(body.catalogueId ?? "CSE");
-    if (!catalogue) {
+    const catalogue = body.catalogueId ? getCatalogue(body.catalogueId) : null;
+    if (body.catalogueId && !catalogue) {
       return void res.status(400).json({
         error: `Unknown catalogue "${body.catalogueId}".`,
         problems: [`Catalogue "${body.catalogueId}" does not exist.`],
@@ -537,18 +330,71 @@ router.post(
 
     const problems: string[] = [];
 
-    // -- teacher pool: codes unique (case-insensitive), "XX" reserved --
-    const teacherByCode = new Map<string, (typeof body.teachers)[number]>();
+    // -- teacher pool: website-preloaded teachers are re-resolved -----
+    // from the faculty registry by derived code (names are NEVER
+    // trusted from the client); manual teachers carry their own name.
+    interface PoolTeacher {
+      name: string;
+      code: string;
+      designation: string;
+      maxPerDay: number;
+      weeklyHours: number;
+    }
+    const poolTeachers: PoolTeacher[] = [];
+    const teacherByCode = new Map<string, PoolTeacher>();
     for (const t of body.teachers) {
+      let name = t.name ?? "";
+      let designation = t.designation ?? "";
+      if (t.facultyCode) {
+        if (!body.facultyDeptId) {
+          problems.push(
+            `Teacher "${t.code}" references website faculty code "${t.facultyCode}" but the payload names no faculty department.`,
+          );
+          continue;
+        }
+        const member = findFaculty(body.facultyDeptId, t.facultyCode);
+        if (!member) {
+          problems.push(
+            `Faculty code "${t.facultyCode}" is not in the ${body.facultyDeptId} faculty list from nita.ac.in.`,
+          );
+          continue;
+        }
+        name = member.name;
+        designation = member.designation;
+      } else if (!name) {
+        problems.push(`Teacher with code "${t.code}" has no name.`);
+        continue;
+      }
       const key = t.code.toUpperCase();
       if (key === "XX") problems.push(`Teacher code "XX" is reserved (it means "no teacher yet").`);
       else if (teacherByCode.has(key)) problems.push(`Duplicate teacher code "${t.code}".`);
-      else teacherByCode.set(key, t);
+      else {
+        const pool: PoolTeacher = {
+          name,
+          code: t.code,
+          designation,
+          maxPerDay: t.maxPerDay ?? 5,
+          weeklyHours: t.weeklyHours,
+        };
+        teacherByCode.set(key, pool);
+        poolTeachers.push(pool);
+      }
     }
 
+    interface ResolvedSubjectShape {
+      catalogueKey: string;
+      shortCode: string;
+      title: string;
+      syllabusCode: string | null;
+      credits: number | null;
+      type: "theory" | "lab";
+      kind: string;
+      sessionHours: number;
+      weeklyHours: number;
+    }
     interface ResolvedAssignment {
       classIndex: number;
-      resolved: NonNullable<ReturnType<typeof resolveSubject>>;
+      resolved: ResolvedSubjectShape;
       teacherCode: string | null; // null = XX
     }
     const resolvedAssignments: ResolvedAssignment[] = [];
@@ -558,62 +404,162 @@ router.post(
     body.classes.forEach((cls, classIndex) => {
       const label =
         `${cls.programme} Sem ${cls.semester}${cls.section ? ` ${cls.section}` : ""}`.trim();
-      const prog = findProgramme(catalogue, cls.programme, cls.specialisation);
-      if (!prog) {
-        problems.push(
-          `Class ${label}: programme "${cls.programme}"${cls.specialisation ? ` (${cls.specialisation})` : ""} is not in the ${catalogue.id} catalogue.`,
-        );
-        return;
-      }
-      const sem = findSemester(prog, cls.semester);
-      if (!sem) {
-        problems.push(`Class ${label}: semester ${cls.semester} is not in the catalogue.`);
-        return;
-      }
-      const catSubjects = semesterSubjects(sem, cls.group);
       const assignmentByKey = new Map(cls.assignments.map((a) => [a.key, a]));
-      for (const key of assignmentByKey.keys()) {
-        if (!catSubjects.some((s) => s.key === key)) {
-          problems.push(`Class ${label}: assignment refers to unknown catalogue subject "${key}".`);
-        }
-      }
-      for (const cs of catSubjects) {
-        if (!cs.timetabled) continue;
-        const a = assignmentByKey.get(cs.key);
-        if (!a) {
-          problems.push(`Class ${label}: subject ${cs.shortCode} (${cs.title}) is not assigned to a teacher.`);
-          continue;
-        }
-        const resolved = resolveSubject(cs, a.electivePick);
+      const customByKey = new Map((cls.customSubjects ?? []).map((s) => [s.shortCode, s]));
+
+      /** Shared teacher/XX bookkeeping for one resolved subject. */
+      const record = (
+        key: string,
+        resolved: ResolvedSubjectShape | null,
+        failProblem: string | null,
+      ) => {
+        const a = assignmentByKey.get(key);
+        if (!a) return; // "not assigned" is reported by the caller loops
         if (!resolved) {
-          problems.push(
-            `Class ${label}: elective ${cs.shortCode} needs a valid pick from its pool${a.electivePick ? ` (got "${a.electivePick}")` : ""}.`,
-          );
-          continue;
+          problems.push(failProblem!);
+          return;
         }
         if (a.teacherCode.toUpperCase() === "XX") {
           resolvedAssignments.push({ classIndex, resolved, teacherCode: null });
           xxSubjects.add(resolved.shortCode);
-          continue;
+          return;
         }
         const teacher = teacherByCode.get(a.teacherCode.toUpperCase());
         if (!teacher) {
           problems.push(
-            `Class ${label}: subject ${cs.shortCode} is assigned to teacher "${a.teacherCode}", who is not in the teacher pool.`,
+            `Class ${label}: subject ${resolved.shortCode} is assigned to teacher "${a.teacherCode}", who is not in the teacher pool.`,
+          );
+          return;
+        }
+        resolvedAssignments.push({ classIndex, resolved, teacherCode: teacher.code });
+        const tkey = teacher.code.toUpperCase();
+        loadByTeacher.set(tkey, (loadByTeacher.get(tkey) ?? 0) + resolved.weeklyHours);
+      };
+
+      // -- catalogue subjects (skipped for fully manual classes) ------
+      let catSubjects: ReturnType<typeof semesterSubjects> = [];
+      if (!cls.custom) {
+        if (!catalogue) {
+          problems.push(
+            `Class ${label}: no catalogue was selected, so this class must be a manual class (custom) with its own subjects.`,
+          );
+          return;
+        }
+        const prog = findProgramme(catalogue, cls.programme, cls.specialisation);
+        if (!prog) {
+          problems.push(
+            `Class ${label}: programme "${cls.programme}"${cls.specialisation ? ` (${cls.specialisation})` : ""} is not in the ${catalogue.id} catalogue.`,
+          );
+          return;
+        }
+        const sem = findSemester(prog, cls.semester);
+        if (!sem) {
+          problems.push(`Class ${label}: semester ${cls.semester} is not in the catalogue.`);
+          return;
+        }
+        catSubjects = semesterSubjects(sem, cls.group);
+        for (const cs of catSubjects) {
+          if (!cs.timetabled) continue;
+          const a = assignmentByKey.get(cs.key);
+          if (!a) {
+            problems.push(`Class ${label}: subject ${cs.shortCode} (${cs.title}) is not assigned to a teacher.`);
+            continue;
+          }
+          // Subjects whose syllabus prints NO numbers (Production):
+          // the assignment MUST carry user-supplied numbers.
+          let numbers: { weeklyHours: number; sessionHours: number; credits: number } | undefined;
+          if (cs.weeklyHours === null) {
+            if (
+              a.weeklyHours === undefined ||
+              a.sessionHours === undefined ||
+              a.credits === undefined
+            ) {
+              problems.push(
+                `Class ${label}: subject ${cs.shortCode} (${cs.title}) has no weekly hours, session hours or credits in the published syllabus — enter them in the setup so the subject can be timetabled.`,
+              );
+              continue;
+            }
+            if (a.sessionHours > a.weeklyHours) {
+              problems.push(
+                `Class ${label}: subject ${cs.shortCode} — session hours (${a.sessionHours}) exceed its weekly hours (${a.weeklyHours}).`,
+              );
+              continue;
+            }
+            numbers = {
+              weeklyHours: a.weeklyHours,
+              sessionHours: a.sessionHours,
+              credits: a.credits,
+            };
+          }
+          const resolved = resolveSubject(cs, a.electivePick, {
+            numbers,
+            customPick: a.customPick,
+          });
+          if (!resolved) {
+            problems.push(
+              cs.electivePool !== undefined && cs.electivePool.length === 0
+                ? `Class ${label}: elective ${cs.shortCode} has no subject list in the syllabus — type the chosen subject's code and title in the setup.`
+                : `Class ${label}: elective ${cs.shortCode} needs a valid pick from its pool${a.electivePick ? ` (got "${a.electivePick}")` : ""}.`,
+            );
+            continue;
+          }
+          record(cs.key, resolved, null);
+        }
+        // A class whose catalogue semester is entirely non-timetabled
+        // (e.g. M.Tech Sem 3) has nothing to assign — the client skips
+        // those, but an empty class is rejected rather than created
+        // hollow — unless manual subjects were added to it.
+        if (
+          catSubjects.every((s) => !s.timetabled) &&
+          (cls.customSubjects ?? []).length === 0
+        ) {
+          problems.push(
+            `Class ${label}: this semester has no timetabled subjects (project/viva only) — do not include it.`,
+          );
+        }
+      } else if ((cls.customSubjects ?? []).length === 0) {
+        problems.push(`Class ${label}: a manual class needs at least one manually added subject.`);
+      }
+
+      // -- manually added subjects (any class) -------------------------
+      for (const cs of cls.customSubjects ?? []) {
+        if (catSubjects.some((s) => s.key === cs.shortCode && s.timetabled)) {
+          problems.push(
+            `Class ${label}: manual subject code "${cs.shortCode}" duplicates a catalogue subject in the same class.`,
           );
           continue;
         }
-        resolvedAssignments.push({ classIndex, resolved, teacherCode: teacher.code });
-        const key = teacher.code.toUpperCase();
-        loadByTeacher.set(key, (loadByTeacher.get(key) ?? 0) + resolved.weeklyHours);
-      }
-      // A class whose semester is entirely non-timetabled (e.g.
-      // M.Tech Sem 3) has nothing to assign — the client skips those,
-      // but an empty class is rejected rather than created hollow.
-      if (catSubjects.every((s) => !s.timetabled)) {
-        problems.push(
-          `Class ${label}: this semester has no timetabled subjects (project/viva only) — do not include it.`,
+        const a = assignmentByKey.get(cs.shortCode);
+        if (!a) {
+          problems.push(`Class ${label}: subject ${cs.shortCode} (${cs.title}) is not assigned to a teacher.`);
+          continue;
+        }
+        record(
+          cs.shortCode,
+          {
+            catalogueKey: cs.shortCode,
+            shortCode: cs.shortCode,
+            title: cs.title,
+            syllabusCode: null,
+            credits: cs.credits,
+            type: cs.kind === "lab" ? "lab" : "theory",
+            kind: cs.kind ?? "theory",
+            sessionHours: cs.sessionHours,
+            weeklyHours: cs.weeklyHours,
+          },
+          null,
         );
+      }
+
+      // -- assignments must refer to something real --------------------
+      for (const key of assignmentByKey.keys()) {
+        if (!catSubjects.some((s) => s.key === key && s.timetabled) && !customByKey.has(key)) {
+          problems.push(
+            cls.custom
+              ? `Class ${label}: assignment refers to unknown subject "${key}".`
+              : `Class ${label}: assignment refers to unknown catalogue subject "${key}".`,
+          );
+        }
       }
     });
 
@@ -626,7 +572,7 @@ router.post(
       }
     }
     if (problems.length) {
-      return void res.status(400).json({ error: "Guided setup has problems", problems });
+      return void res.status(400).json({ error: "Setup has problems", problems });
     }
 
     // -- duplicate department name? Never overwrite: 409 + switch hint -
@@ -652,7 +598,7 @@ router.post(
     });
     const deptFilter = scope(dept._id.toString());
 
-    // Subjects: unique by shortCode within the department, catalogue values.
+    // Subjects: unique by shortCode within the department.
     const subjectIdByCode = new Map<string, string>();
     for (const ra of resolvedAssignments) {
       const r = ra.resolved;
@@ -691,7 +637,7 @@ router.post(
       eligibilityByTeacher.get(key)!.add(ra.resolved.shortCode);
     }
     let teachersCreated = 0;
-    for (const t of body.teachers) {
+    for (const t of poolTeachers) {
       const codes = eligibilityByTeacher.get(t.code.toUpperCase()) ?? new Set<string>();
       await Teacher.create({
         ...deptFilter,
@@ -734,7 +680,7 @@ router.post(
 
     res.status(201).json({
       message:
-        `${body.department.short} department created from the ${catalogue.id} syllabus catalogue alongside your existing departments (nothing was deleted): ` +
+        `${body.department.short} department created${catalogue ? ` from the ${catalogue.id} syllabus catalogue` : " from manual entries"} alongside your existing departments (nothing was deleted): ` +
         `${body.classes.length} classes, ${subjectIdByCode.size} subjects, ${teachersCreated} teachers` +
         (xxSubjects.size > 0 ? `, ${xxSubjects.size} subject(s) left as XX (no teacher yet)` : "") +
         `. It is now the active department — click Generate Routine.`,
@@ -746,7 +692,7 @@ router.post(
         classSubjects: mappings,
         xxSubjects: xxSubjects.size,
       },
-      teacherLoads: body.teachers.map((t) => ({
+      teacherLoads: poolTeachers.map((t) => ({
         code: t.code,
         name: t.name,
         assignedHours: loadByTeacher.get(t.code.toUpperCase()) ?? 0,

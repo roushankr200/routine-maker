@@ -1,22 +1,21 @@
 import axios from "axios";
 import type {
-  BalancePreviewPayload,
   BalanceReport,
   CatalogListResponse,
   CatalogueDepartment,
   ClassSection,
   DashboardData,
-  DepartmentSetupResult,
   DepartmentsResponse,
+  FacultyDeptResponse,
   GenerateResult,
   GuidedSetupPayload,
   GuidedSetupResult,
+  RegistryDepartment,
   RoutineEntry,
   ScheduleConfig,
   Subject,
   Teacher,
   ValidationData,
-  WizardPayload,
 } from "./types";
 
 export const api = axios.create({ baseURL: "/api" });
@@ -80,11 +79,14 @@ export const deleteClassSubject = (classId: string, subjectId: string) =>
 export const fetchConfig = () => api.get<ScheduleConfig>("/config").then((r) => r.data);
 export const saveConfig = (cfg: ScheduleConfig) => api.put("/config", cfg);
 
-// New Department wizard — creates an ADDITIONAL department (nothing is deleted).
-export const setupDepartment = (payload: WizardPayload) =>
-  api.post<DepartmentSetupResult>("/setup/department", payload).then((r) => r.data);
+// Department registry + website faculty lists (nita.ac.in preloads).
+export const fetchRegistry = () =>
+  api.get<{ departments: RegistryDepartment[] }>("/faculty").then((r) => r.data.departments);
+export const fetchFaculty = (deptId: string) =>
+  api.get<FacultyDeptResponse>(`/faculty/${deptId}`).then((r) => r.data);
 
-// Syllabus catalogue + guided setup — subjects preloaded from the official syllabus.
+// Syllabus catalogues + the ONE unified setup (creates an ADDITIONAL
+// department — nothing is ever deleted).
 export const fetchCatalogList = () =>
   api.get<CatalogListResponse>("/catalog").then((r) => r.data);
 export const fetchCatalogue = (id: string) =>
@@ -105,5 +107,3 @@ export const fetchValidation = () => api.get<ValidationData>("/validation").then
 
 // Load balance — coverage (hours left per subject) + suggested teacher loads
 export const fetchBalance = () => api.get<BalanceReport>("/balance").then((r) => r.data);
-export const previewBalance = (payload: BalancePreviewPayload) =>
-  api.post<BalanceReport>("/balance/preview", payload).then((r) => r.data);
