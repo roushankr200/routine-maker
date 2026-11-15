@@ -1,30 +1,39 @@
+import { mkdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import mongoose from "mongoose";
+import type { MongoMemoryServer } from "mongodb-memory-server";
 
-/**
- * Database connection.
- *
- * - Production: set MONGODB_URI (e.g. a MongoDB Atlas connection string).
- * - Local dev / demo: if MONGODB_URI is not set, we spin up an in-memory
- *   MongoDB via mongodb-memory-server — zero setup, `npm run dev` just
- *   works. Data lives only while the process runs in that mode.
- */
+const localDataDir = fileURLToPath(new URL("../../.local/mongodb", import.meta.url));
+let localMongo: MongoMemoryServer | undefined;
+
 export async function connectDb(): Promise<string> {
   const uri = process.env.MONGODB_URI;
   if (uri) {
     await mongoose.connect(uri);
     return "MONGODB_URI";
   }
-  // Lazy import so production installs don't need the binary download path
-  // unless the fallback is actually used.
+  // Keep production demos temporary when no external database is configured.
+  const dbPath = process.env.NODE_ENV === "production" ? undefined : localDataDir;
   const { MongoMemoryServer } = await import("mongodb-memory-server");
-  const mongod = await MongoMemoryServer.create();
-  await mongoose.connect(mongod.getUri("routine-maker"));
-  console.warn(
-    "[db] MONGODB_URI not set — using in-memory MongoDB (data resets on restart).",
-  );
-  return "mongodb-memory-server";
+  if (dbPath) await mkdir(dbPath, { recursive: true });
+  const mongod = await MongoMemoryServer.create({
+    instance: { dbPath, storageEngine: "wiredTiger", ip: "127.0.0.1" },
+  });
+  try {
+    await mongoose.connect(mongod.getUri("routine-maker"));
+  } catch (error) {
+    await mongod.stop();
+    throw error;
+  }
+  localMongo = mongod;
+  return dbPath ? `local MongoDB (${dbPath})` : "temporary MongoDB";
 }
 
 export async function disconnectDb(): Promise<void> {
-  await mongoose.disconnect();
+  try {
+    await mongoose.disconnect();
+  } finally {
+    await localMongo?.stop();
+    localMongo = undefined;
+  }
 }

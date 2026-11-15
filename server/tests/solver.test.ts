@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { solve, splitSessions } from "../src/solver/solver.js";
-import { SolveResult, unavailableKey } from "../src/solver/types.js";
+import { SolveResult, scheduledWeeklyHours, unavailableKey } from "../src/solver/types.js";
 import { buildDemoSolverData } from "../src/demoData.js";
 
 const { teachers, subjects, classSubjects, config } = buildDemoSolverData();
@@ -34,15 +34,10 @@ function insideOneSegment(start: number, duration: number, lunchAfter: number | 
 describe("demo dataset solves clean", () => {
   it("places every session: full placement, success = true", () => {
     expect(result.success, `unplaced: ${JSON.stringify(result.unplaced)}`).toBe(true);
-    const total = classSubjects.reduce((s, c) => s + c.hours, 0);
+    const total = classSubjects.reduce((s, c) => s + scheduledWeeklyHours(c.hours, subjects.get(c.subjectId)), 0);
     expect(result.entries.length).toBe(total);
-    // Full NITA CSE department seed, derived from the syllabus
-    // catalogue (block model): B.Tech Sem 1 Group I/II = 25h + 26h,
-    // 3A/3B = 26h, 5A/5B = 28h, 7A/7B = 11h; MCA 31h + 31h + 28h
-    // (labs are 0-0-6 -> two 3h sessions); M.Tech CYSEC/DSE/AI = 25h
-    // each (labs 0-0-2 -> one 2h session) = 346 hours in 180 sessions.
-    expect(total).toBe(346);
-    expect(result.totalJobs).toBe(180);
+    expect(total).toBe(400);
+    expect(result.totalJobs).toBe(208);
   });
 
   it("H1: no teacher teaches two classes in the same slot", () => {
@@ -69,7 +64,7 @@ describe("demo dataset solves clean", () => {
   it("H5: every class gets exactly its required hours per subject", () => {
     const got = counter(result.entries.map((e) => `${e.classId}|${e.subjectId}`));
     for (const cs of classSubjects) {
-      expect(got.get(`${cs.classId}|${cs.subjectId}`)).toBe(cs.hours);
+      expect(got.get(`${cs.classId}|${cs.subjectId}`)).toBe(scheduledWeeklyHours(cs.hours, subjects.get(cs.subjectId)));
     }
   });
 
@@ -102,7 +97,7 @@ describe("block sessions (the real sheet's model)", () => {
     }
     for (const cs of classSubjects) {
       const subject = subjects.get(cs.subjectId)!;
-      const expected = splitSessions(cs.hours, subject.sessionHours).sort((a, b) => a - b);
+      const expected = splitSessions(scheduledWeeklyHours(cs.hours, subject), subject.sessionHours).sort((a, b) => a - b);
       const got = (byKey.get(`${cs.classId}|${cs.subjectId}`) ?? []).sort((a, b) => a - b);
       expect(got, `${subject.code} for ${cs.classId}`).toEqual(expected);
     }

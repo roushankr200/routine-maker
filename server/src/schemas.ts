@@ -44,6 +44,7 @@ export const subjectSchema = z
   });
 
 export const classSchema = z.object({
+  studentCount: z.number().int().min(1).max(10000).nullable().optional(),
   program: z.string().trim().min(1, "program is required"),
   year: z.string().trim().min(1, "year is required"),
   section: z.string().trim().default(""),
@@ -176,6 +177,7 @@ export const guidedCustomSubjectSchema = z
   });
 
 export const guidedSetupSchema = z.object({
+  variationName: z.string().trim().min(1).max(60).optional(),
   /** Catalogue id (CSE, CIVIL, …); omit for a fully manual department. */
   catalogueId: z.string().trim().min(1).optional(),
   /** Registry department whose website faculty list is preloaded. */
@@ -213,6 +215,7 @@ export const guidedSetupSchema = z.object({
         specialisation: z.string().trim().max(60).optional(),
         semester: z.coerce.number().int().min(1).max(12),
         section: z.string().trim().max(20).default(""),
+        studentCount: z.number().int().min(1).max(10000).optional(),
         /** B.Tech Sem 1/2 section variant: "I" | "II". */
         group: z.enum(["I", "II"]).optional(),
         /** True = a manual class: no catalogue, all subjects custom. */

@@ -1,5 +1,6 @@
 import axios from "axios";
 import type {
+  Account,
   BalanceReport,
   CatalogListResponse,
   CatalogueDepartment,
@@ -11,7 +12,9 @@ import type {
   GuidedSetupPayload,
   GuidedSetupResult,
   RegistryDepartment,
+  PreviousAssignment,
   RoutineEntry,
+  Room,
   ScheduleConfig,
   Subject,
   Teacher,
@@ -19,6 +22,16 @@ import type {
 } from "./types";
 
 export const api = axios.create({ baseURL: "/api" });
+
+export const currentAccount = () => api.get<Account>("/auth/me").then((r) => r.data);
+export const login = (body: { email: string; password: string }) => api.post<Account>("/auth/login", body);
+export const signup = (body: { email: string; password: string; name: string; role: Account["role"]; adminCode: string }) => api.post<Account>("/auth/signup", body);
+export const logout = () => api.post("/auth/logout");
+export const fetchAccounts = () => api.get<Account[]>("/accounts").then((r) => r.data);
+export const linkAccount = (id: string, memberId: string | null) => api.put(`/accounts/${id}`, { memberId });
+export const fetchMyRoutine = () => api.get<{ linked: boolean; config?: ScheduleConfig; entries: RoutineEntry[] }>("/me/routine").then((r) => r.data);
+export const fetchRooms = () => api.get<Room[]>("/rooms").then((r) => r.data);
+export const saveRoom = (room: Omit<Room, "id"> & { id?: string }) => room.id ? api.put(`/rooms/${room.id}`, room) : api.post("/rooms", room);
 
 export function errorMessage(err: unknown): string {
   if (axios.isAxiosError(err)) {
@@ -41,6 +54,8 @@ export const fetchDepartments = () =>
   api.get<DepartmentsResponse>("/departments").then((r) => r.data);
 export const activateDepartment = (id: string) =>
   api.post<{ message: string }>(`/departments/${id}/activate`).then((r) => r.data);
+export const copyRoutineVariation = (id: string, name: string) =>
+  api.post<{ id: string; message: string }>(`/departments/${id}/variations`, { name }).then((r) => r.data);
 export const deleteDepartment = (id: string) =>
   api.delete<{ message: string }>(`/departments/${id}`).then((r) => r.data);
 export const clearRoutine = () => api.post<{ message: string }>("/routine/clear").then((r) => r.data);
@@ -82,6 +97,8 @@ export const saveConfig = (cfg: ScheduleConfig) => api.put("/config", cfg);
 // Department registry + website faculty lists (nita.ac.in preloads).
 export const fetchRegistry = () =>
   api.get<{ departments: RegistryDepartment[] }>("/faculty").then((r) => r.data.departments);
+export const fetchPreviousAssignments = (deptId: string) =>
+  api.get<{ source: string | null; rows: PreviousAssignment[] }>(`/setup/previous-assignments/${deptId}`).then((r) => r.data);
 export const fetchFaculty = (deptId: string) =>
   api.get<FacultyDeptResponse>(`/faculty/${deptId}`).then((r) => r.data);
 

@@ -13,7 +13,7 @@ import {
 import type { ClassSection } from "../types";
 import { Banner, PageTitle } from "../components/ui";
 
-const empty: Partial<ClassSection> = { program: "", year: "", section: "" };
+const empty: Partial<ClassSection> = { program: "", year: "", section: "", studentCount: null };
 
 export default function Classes() {
   const qc = useQueryClient();
@@ -70,7 +70,7 @@ export default function Classes() {
         }}
       >
         <h2 className="mb-3 font-semibold">{form.id ? "Edit class" : "Add class"}</h2>
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-4">
           <div>
             <label className="label" htmlFor="c-prog">Program</label>
             <input id="c-prog" className="input" required placeholder="B.Tech" value={form.program ?? ""}
@@ -85,6 +85,11 @@ export default function Classes() {
             <label className="label" htmlFor="c-sec">Section (optional)</label>
             <input id="c-sec" className="input" placeholder="A" value={form.section ?? ""}
               onChange={(e) => setForm({ ...form, section: e.target.value })} />
+          </div>
+          <div>
+            <label className="label" htmlFor="c-size">Student count</label>
+            <input id="c-size" className="input" type="number" min={1} max={10000} value={form.studentCount ?? ""}
+              onChange={(e) => setForm({ ...form, studentCount: e.target.value === "" ? null : Number(e.target.value) })} />
           </div>
         </div>
         <div className="mt-4 flex gap-2">
@@ -110,10 +115,13 @@ export default function Classes() {
                   <span className="ml-2 font-mono text-sm font-normal text-muted">
                     {c.totalHours} hrs/week required (H5)
                   </span>
+                  <span className={`ml-2 text-sm font-normal ${c.studentCount ? "text-muted" : "text-accent-dark"}`}>
+                    {c.studentCount ? `${c.studentCount} students` : "Student count needed"}
+                  </span>
                 </h2>
                 <div className="flex gap-1">
                   <button className="btn-ghost !min-h-[36px] px-2" aria-label={`Edit ${c.name}`}
-                    onClick={() => setForm(c)}>
+                    onClick={() => { setForm(c); window.scrollTo({ top: 0 }); }}>
                     <Pencil className="h-4 w-4" aria-hidden />
                   </button>
                   <button className="btn-danger !min-h-[36px] px-2" aria-label={`Delete ${c.name}`}
@@ -129,7 +137,12 @@ export default function Classes() {
                       <td className="td font-mono text-xs">{r.code}</td>
                       <td className="td">{r.name}</td>
                       <td className="td capitalize">{r.type}</td>
-                      <td className="td font-mono">{r.hours} hrs</td>
+                      <td className="td font-mono">
+                        {r.hours} hrs
+                        {r.recordedHours !== undefined && r.recordedHours !== r.hours && (
+                          <span className="block font-sans text-xs text-muted">{r.recordedHours}h recorded · one weekly lab</span>
+                        )}
+                      </td>
                       <td className="td text-right">
                         <button className="btn-danger !min-h-[32px] px-2 text-xs"
                           aria-label={`Remove ${r.name} from ${c.name}`}

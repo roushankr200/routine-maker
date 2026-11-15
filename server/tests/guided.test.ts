@@ -31,7 +31,7 @@ async function req(method: string, path: string, body?: unknown) {
   return { status: res.status, json: json as never };
 }
 
-/** MCA Sem 1 only, 3 teachers — loads: TO 13h, TT 14h, TH 10h (caps 24). */
+/** MCA Sem 1 only, with three teachers and default 24h weekly caps. */
 function mcaPayload(departmentName: string, overrides?: {
   omit?: string;
   xx?: string;
@@ -71,7 +71,7 @@ beforeAll(async () => {
   });
   await mongoose.connect(mongod.getUri("routine-maker-guided-test"));
   await backfillLegacyData();
-  server = createApp().listen(0);
+  server = createApp({ allowAnonymous: true }).listen(0);
   const addr = server.address();
   if (!addr || typeof addr === "string") throw new Error("no port");
   base = `http://127.0.0.1:${addr.port}`;
@@ -97,7 +97,7 @@ describe("guided setup validation (nothing is written on a bad payload)", () => 
     const r = await req(
       "POST",
       "/api/setup/guided",
-      mcaPayload("Guided Test Dept", { teacherMax: { TO: 10 } }), // TO's load is 13h
+      mcaPayload("Guided Test Dept", { teacherMax: { TO: 9 } }), // TO's scheduled load is 10h
     );
     expect(r.status).toBe(400);
     const problems = (r.json as { problems: string[] }).problems;
@@ -148,12 +148,12 @@ describe("guided setup happy path", () => {
     const dfsLab = subjects.find((s) => s.code === "DFS Lab")!;
     expect(dfsLab.credits).toBe(3);
 
-    // The new department is active and generates: MCA Sem 1 = 31h.
+    // MCA Sem 1 schedules one weekly session per lab, for 25 hours total.
     const gen = await req("POST", "/api/routine/generate");
     expect(gen.status).toBe(200);
     expect((gen.json as { success: boolean }).success).toBe(true);
-    expect((gen.json as { placedPeriods: number; totalPeriods: number }).placedPeriods).toBe(31);
-    expect((gen.json as { totalPeriods: number }).totalPeriods).toBe(31);
+    expect((gen.json as { placedPeriods: number; totalPeriods: number }).placedPeriods).toBe(25);
+    expect((gen.json as { totalPeriods: number }).totalPeriods).toBe(25);
   });
 
   it("duplicate department name -> 409 with the existing id", async () => {
@@ -203,7 +203,7 @@ describe("guided setup with an XX subject", () => {
     };
     expect(depts.departments).toHaveLength(3);
     const cse = depts.departments.find((d) => d.name === "Computer Science and Engineering")!;
-    expect(cse.counts).toMatchObject({ teachers: 42, subjects: 69, classes: 14 });
+    expect(cse.counts).toMatchObject({ teachers: 42, subjects: 69, classes: 17 });
     const xx = depts.departments.find((d) => d.name === "Guided XX Dept")!;
     expect(xx.counts).toMatchObject({ teachers: 3, subjects: 7, classes: 1 });
   });

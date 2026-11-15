@@ -15,10 +15,13 @@ import {
   deleteDepartmentData,
   departmentCounts,
   findDepartmentByName,
+  findVariation,
   getActiveDepartment,
   listDepartments,
+  publishedRoutineScope,
   scope,
   setActiveDepartment,
+  variationKey,
 } from "./departments.js";
 import { mergedScheduleConfig } from "./data.js";
 import {
@@ -51,9 +54,15 @@ import {
 } from "./solver/balance.js";
 import { loadSolverData, validateData } from "./data.js";
 import { solve } from "./solver/solver.js";
+import { scheduledWeeklyHours } from "./solver/types.js";
 import { loadDemoData } from "./seed.js";
 import { classLabel, parseSemesterNumber } from "./demoData.js";
 import { checkBlockPlacement, EntryLike, sessionBlock } from "./routineCheck.js";
+import { accountFor } from "./accounts.js";
+import { Room, otherRoomReservations, roomConstraints } from "./rooms.js";
+import { scheduleWrite } from "./scheduleWrite.js";
+import { previousAssignments } from "./previousAssignments.js";
+import { copyRoutineVariation } from "./variations.js";
 
 export const router = Router();
 
@@ -68,8 +77,10 @@ function parse<T>(schema: z.ZodSchema<T>, body: unknown, res: Response): T | nul
 
 const wrap =
   (fn: (req: Request, res: Response) => Promise<void>) =>
-  (req: Request, res: Response, next: NextFunction) =>
-    fn(req, res).catch(next);
+  (req: Request, res: Response, next: NextFunction) => {
+    const run = () => fn(req, res);
+    return (req.method === "GET" ? run() : scheduleWrite(run)).catch(next);
+  };
 
 /** Id of the ACTIVE department, or null on a fresh (empty) workspace. */
 async function activeDeptId(): Promise<string | null> {
@@ -104,12 +115,17 @@ router.get(
   wrap(async (_req, res) => {
     const [depts, activeId] = await Promise.all([listDepartments(), activeDeptId()]);
     const out = [];
-    for (const d of depts) {
+    const grouped = depts.filter((d) => !d.parentDepartmentId).flatMap((d) => [
+      d, ...depts.filter((variation) => variation.parentDepartmentId?.equals(d._id)),
+    ]);
+    for (const d of grouped) {
       const counts = await departmentCounts(d._id.toString());
       out.push({
         id: d._id.toString(),
         name: d.name,
         shortName: d.shortName,
+        parentDepartmentId: d.parentDepartmentId?.toString() ?? null,
+        variationName: d.variationName ?? null,
         session: d.session,
         effectiveFrom: d.effectiveFrom,
         createdAt: d.createdAt,
@@ -120,6 +136,19 @@ router.get(
     res.json({ departments: out, activeDepartmentId: activeId });
   }),
 );
+
+router.post("/departments/:id/variations", wrap(async (req, res) => {
+  const body = parse(z.object({ name: z.string().trim().min(1).max(60) }), req.body, res);
+  if (!body) return;
+  if (!Types.ObjectId.isValid(req.params.id)) return void res.status(404).json({ error: "Department or variation not found." });
+  const source = await Department.findById(req.params.id);
+  if (!source) return void res.status(404).json({ error: "Department or variation not found." });
+  if (await findVariation(source.parentDepartmentId ?? source._id, body.name)) {
+    return void res.status(409).json({ error: "A variation with this name already exists in this department." });
+  }
+  const copy = await copyRoutineVariation(source, body.name);
+  res.status(201).json({ id: copy._id.toString(), message: `Variation “${body.name}” created.` });
+}));
 
 router.post(
   "/departments/:id/activate",
@@ -141,8 +170,11 @@ router.delete(
   wrap(async (req, res) => {
     const dept = await Department.findById(req.params.id);
     if (!dept) return void res.status(404).json({ error: "Department not found." });
-    const total = await Department.countDocuments();
-    if (total <= 1) {
+    if (!dept.parentDepartmentId && await Department.exists({ parentDepartmentId: dept._id })) {
+      return void res.status(409).json({ error: "Delete this department’s variations before deleting the department." });
+    }
+    const total = await Department.countDocuments({ parentDepartmentId: null });
+    if (!dept.parentDepartmentId && total <= 1) {
       return void res.status(400).json({
         error: "Cannot delete the last remaining department — create another department first if you want to replace it.",
       });
@@ -151,7 +183,8 @@ router.delete(
     await deleteDepartmentData(dept._id.toString());
     let newActive: string | null = null;
     if (wasActive) {
-      const next = await Department.findOne().sort({ createdAt: 1 });
+      const next = (dept.parentDepartmentId && await Department.findById(dept.parentDepartmentId))
+        || await Department.findOne({ parentDepartmentId: null }).sort({ createdAt: 1 });
       if (next) {
         await setActiveDepartment(next._id);
         newActive = next._id.toString();
@@ -279,6 +312,12 @@ router.get(
 );
 
 // ------------------------------------------------------------ unified setup
+router.get("/setup/previous-assignments/:deptId", wrap(async (req, res) => {
+  const entry = DEPARTMENT_REGISTRY.find((item) => item.id === req.params.deptId.toUpperCase());
+  if (!entry) return void res.status(404).json({ error: "Department not found." });
+  res.json(await scheduleWrite(() => previousAssignments(entry.name, entry.id === "CSE")));
+}));
+
 /**
  * POST /api/setup/guided — the ONE department setup's single commit
  * (v2.4; the route name is kept from v2.3 for compatibility).
@@ -406,6 +445,7 @@ router.post(
         `${cls.programme} Sem ${cls.semester}${cls.section ? ` ${cls.section}` : ""}`.trim();
       const assignmentByKey = new Map(cls.assignments.map((a) => [a.key, a]));
       const customByKey = new Map((cls.customSubjects ?? []).map((s) => [s.shortCode, s]));
+      const subjectCodes = new Set<string>();
 
       /** Shared teacher/XX bookkeeping for one resolved subject. */
       const record = (
@@ -419,6 +459,12 @@ router.post(
           problems.push(failProblem!);
           return;
         }
+        const subjectCode = resolved.shortCode.toUpperCase();
+        if (subjectCodes.has(subjectCode)) {
+          problems.push(`Class ${label}: ${resolved.shortCode} is selected more than once. Choose a different elective or remove the duplicate subject.`);
+          return;
+        }
+        subjectCodes.add(subjectCode);
         if (a.teacherCode.toUpperCase() === "XX") {
           resolvedAssignments.push({ classIndex, resolved, teacherCode: null });
           xxSubjects.add(resolved.shortCode);
@@ -433,7 +479,7 @@ router.post(
         }
         resolvedAssignments.push({ classIndex, resolved, teacherCode: teacher.code });
         const tkey = teacher.code.toUpperCase();
-        loadByTeacher.set(tkey, (loadByTeacher.get(tkey) ?? 0) + resolved.weeklyHours);
+        loadByTeacher.set(tkey, (loadByTeacher.get(tkey) ?? 0) + scheduledWeeklyHours(resolved.weeklyHours, resolved));
       };
 
       // -- catalogue subjects (skipped for fully manual classes) ------
@@ -577,7 +623,7 @@ router.post(
 
     // -- duplicate department name? Never overwrite: 409 + switch hint -
     const existingDept = await findDepartmentByName(body.department.name);
-    if (existingDept) {
+    if (existingDept && !body.variationName) {
       return void res.status(409).json({
         error: "Department already exists",
         departmentId: existingDept._id.toString(),
@@ -588,117 +634,140 @@ router.post(
         },
       });
     }
+    if (!existingDept && body.variationName) {
+      return void res.status(400).json({ error: "Create the department before adding a routine variation." });
+    }
+    const variationName = body.variationName;
+    if (existingDept && variationName && await findVariation(existingDept._id, variationName)) {
+      return void res.status(409).json({ error: "A variation with this name already exists in this department." });
+    }
 
     // -- create the NEW department + its scoped data (nothing wiped) ---
     const dept = await Department.create({
-      name: body.department.name,
-      shortName: body.department.short,
+      name: existingDept?.name ?? body.department.name,
+      shortName: existingDept?.shortName ?? body.department.short,
       session: body.department.session ?? "ODD 2026",
       effectiveFrom: body.department.effectiveFrom ?? "",
+      ...(existingDept && variationName ? { parentDepartmentId: existingDept._id, variationName, variationKey: variationKey(variationName) } : {}),
     });
     const deptFilter = scope(dept._id.toString());
 
-    // Subjects: unique by shortCode within the department.
-    const subjectIdByCode = new Map<string, string>();
-    for (const ra of resolvedAssignments) {
-      const r = ra.resolved;
-      if (subjectIdByCode.has(r.shortCode)) continue;
-      const doc = await Subject.create({
-        ...deptFilter,
-        name: r.title,
-        code: r.shortCode,
-        type: r.type,
-        sessionHours: r.sessionHours,
-        credits: r.credits,
-        syllabusCode: r.syllabusCode ?? "",
+    try {
+
+      // Subjects: unique by shortCode within the department.
+      const subjectIdByCode = new Map<string, string>();
+      for (const ra of resolvedAssignments) {
+        const r = ra.resolved;
+        if (subjectIdByCode.has(r.shortCode)) continue;
+        const doc = await Subject.create({
+          ...deptFilter,
+          name: r.title,
+          code: r.shortCode,
+          type: r.type,
+          sessionHours: r.sessionHours,
+          credits: r.credits,
+          syllabusCode: r.syllabusCode ?? "",
+        });
+        subjectIdByCode.set(r.shortCode, doc._id.toString());
+      }
+
+      const classIds: string[] = [];
+      const originalClasses = existingDept ? await ClassSection.find(scope(existingDept._id.toString())).lean() : [];
+      for (const cls of body.classes) {
+        const original = originalClasses.find((row) => row.program === cls.programme
+          && (row.semesterNumber ?? parseSemesterNumber(row.year)) === cls.semester && row.section === cls.section);
+        const doc = await ClassSection.create({
+          ...deptFilter,
+          program: cls.programme,
+          year: `Sem ${cls.semester}`,
+          section: cls.section ?? "",
+          programme: cls.programme,
+          semesterNumber: cls.semester,
+          studentCount: cls.studentCount ?? original?.studentCount ?? null,
+        });
+        classIds.push(doc._id.toString());
+      }
+
+      // Teachers: eligibility = exactly the subjects they were assigned.
+      const eligibilityByTeacher = new Map<string, Set<string>>();
+      for (const ra of resolvedAssignments) {
+        if (!ra.teacherCode) continue;
+        const key = ra.teacherCode.toUpperCase();
+        if (!eligibilityByTeacher.has(key)) eligibilityByTeacher.set(key, new Set());
+        eligibilityByTeacher.get(key)!.add(ra.resolved.shortCode);
+      }
+      const teacherIds = new Map<string, Types.ObjectId>();
+      let teachersCreated = 0;
+      for (const t of poolTeachers) {
+        const codes = eligibilityByTeacher.get(t.code.toUpperCase()) ?? new Set<string>();
+        const teacher = await Teacher.create({
+          ...deptFilter,
+          name: t.name,
+          code: t.code,
+          designation: t.designation ?? "",
+          maxPerDay: t.maxPerDay ?? 5,
+          weeklyHours: t.weeklyHours,
+          subjects: [...codes].map((c) => subjectIdByCode.get(c)),
+        });
+        teacherIds.set(t.code.toUpperCase(), teacher._id);
+        teachersCreated++;
+      }
+
+      // XX placeholder: one internal teacher for every XX subject.
+      if (xxSubjects.size > 0) {
+        const teacher = await Teacher.create({
+          ...deptFilter,
+          name: "Teacher not assigned yet",
+          code: "XX",
+          designation: "",
+          maxPerDay: 7,
+          weeklyHours: 80,
+          subjects: [...xxSubjects].map((c) => subjectIdByCode.get(c)),
+          isPlaceholder: true,
+        });
+        teacherIds.set("XX", teacher._id);
+      }
+
+      let mappings = 0;
+      for (const ra of resolvedAssignments) {
+        await ClassSubject.create({
+          ...deptFilter,
+          classId: classIds[ra.classIndex],
+          subjectId: subjectIdByCode.get(ra.resolved.shortCode),
+          teacherId: variationName ? teacherIds.get(ra.teacherCode?.toUpperCase() ?? "XX") : undefined,
+          hours: ra.resolved.weeklyHours,
+        });
+        mappings++;
+      }
+
+      await setActiveDepartment(dept._id);
+
+      res.status(201).json({
+        message:
+          `${variationName ? `Routine variation “${variationName}” created for ${dept.shortName}` : `${dept.shortName} department created`}: ` +
+          `${body.classes.length} classes, ${subjectIdByCode.size} subjects, ${teachersCreated} teachers` +
+          (xxSubjects.size > 0 ? `, ${xxSubjects.size} subject(s) left as XX (no teacher yet)` : "") +
+          `. It is now the active department — click Generate Routine.`,
+        departmentId: dept._id.toString(),
+        variationName: variationName ?? null,
+        counts: {
+          teachers: teachersCreated,
+          subjects: subjectIdByCode.size,
+          classes: body.classes.length,
+          classSubjects: mappings,
+          xxSubjects: xxSubjects.size,
+        },
+        teacherLoads: poolTeachers.map((t) => ({
+          code: t.code,
+          name: t.name,
+          assignedHours: loadByTeacher.get(t.code.toUpperCase()) ?? 0,
+          weeklyHours: t.weeklyHours,
+        })),
       });
-      subjectIdByCode.set(r.shortCode, doc._id.toString());
+    } catch (error) {
+      await deleteDepartmentData(dept._id.toString());
+      throw error;
     }
-
-    const classIds: string[] = [];
-    for (const cls of body.classes) {
-      const doc = await ClassSection.create({
-        ...deptFilter,
-        program: cls.programme,
-        year: `Sem ${cls.semester}`,
-        section: cls.section ?? "",
-        programme: cls.programme,
-        semesterNumber: cls.semester,
-      });
-      classIds.push(doc._id.toString());
-    }
-
-    // Teachers: eligibility = exactly the subjects they were assigned.
-    const eligibilityByTeacher = new Map<string, Set<string>>();
-    for (const ra of resolvedAssignments) {
-      if (!ra.teacherCode) continue;
-      const key = ra.teacherCode.toUpperCase();
-      if (!eligibilityByTeacher.has(key)) eligibilityByTeacher.set(key, new Set());
-      eligibilityByTeacher.get(key)!.add(ra.resolved.shortCode);
-    }
-    let teachersCreated = 0;
-    for (const t of poolTeachers) {
-      const codes = eligibilityByTeacher.get(t.code.toUpperCase()) ?? new Set<string>();
-      await Teacher.create({
-        ...deptFilter,
-        name: t.name,
-        code: t.code,
-        designation: t.designation ?? "",
-        maxPerDay: t.maxPerDay ?? 5,
-        weeklyHours: t.weeklyHours,
-        subjects: [...codes].map((c) => subjectIdByCode.get(c)),
-      });
-      teachersCreated++;
-    }
-
-    // XX placeholder: one internal teacher for every XX subject.
-    if (xxSubjects.size > 0) {
-      await Teacher.create({
-        ...deptFilter,
-        name: "Teacher not assigned yet",
-        code: "XX",
-        designation: "",
-        maxPerDay: 7,
-        weeklyHours: 80,
-        subjects: [...xxSubjects].map((c) => subjectIdByCode.get(c)),
-        isPlaceholder: true,
-      });
-    }
-
-    let mappings = 0;
-    for (const ra of resolvedAssignments) {
-      await ClassSubject.create({
-        ...deptFilter,
-        classId: classIds[ra.classIndex],
-        subjectId: subjectIdByCode.get(ra.resolved.shortCode),
-        hours: ra.resolved.weeklyHours,
-      });
-      mappings++;
-    }
-
-    await setActiveDepartment(dept._id);
-
-    res.status(201).json({
-      message:
-        `${body.department.short} department created${catalogue ? ` from the ${catalogue.id} syllabus catalogue` : " from manual entries"} alongside your existing departments (nothing was deleted): ` +
-        `${body.classes.length} classes, ${subjectIdByCode.size} subjects, ${teachersCreated} teachers` +
-        (xxSubjects.size > 0 ? `, ${xxSubjects.size} subject(s) left as XX (no teacher yet)` : "") +
-        `. It is now the active department — click Generate Routine.`,
-      departmentId: dept._id.toString(),
-      counts: {
-        teachers: teachersCreated,
-        subjects: subjectIdByCode.size,
-        classes: body.classes.length,
-        classSubjects: mappings,
-        xxSubjects: xxSubjects.size,
-      },
-      teacherLoads: poolTeachers.map((t) => ({
-        code: t.code,
-        name: t.name,
-        assignedHours: loadByTeacher.get(t.code.toUpperCase()) ?? 0,
-        weeklyHours: t.weeklyHours,
-      })),
-    });
   }),
 );
 
@@ -746,8 +815,10 @@ router.delete(
   "/teachers/:id",
   wrap(async (req, res) => {
     const deptId = await activeDeptId();
-    if (deptId) await Teacher.findOneAndDelete({ _id: req.params.id, ...scope(deptId) });
-    else await Teacher.findByIdAndDelete(req.params.id);
+    if (!deptId || !await Teacher.findOneAndDelete({ _id: req.params.id, ...scope(deptId) })) {
+      return void res.status(404).json({ error: "Teacher not found." });
+    }
+    await ClassSubject.updateMany({ ...scope(deptId), teacherId: req.params.id }, { $unset: { teacherId: 1 } });
     await TeacherUnavailable.deleteMany({ teacherId: req.params.id });
     await RoutineEntry.deleteMany({ teacherId: req.params.id });
     res.json({ message: "Teacher deleted." });
@@ -873,7 +944,8 @@ router.get(
             const s = subjectById.get(r.subjectId.toString());
             return {
               subjectId: r.subjectId.toString(),
-              hours: r.hours,
+              hours: scheduledWeeklyHours(r.hours, s),
+              recordedHours: r.hours,
               name: s?.name ?? "?",
               code: s?.code ?? "?",
               type: s?.type ?? "theory",
@@ -891,6 +963,7 @@ router.get(
           programme: c.programme ?? c.program,
           semesterNumber: c.semesterNumber ?? parseSemesterNumber(c.year),
           name: classLabel(c.program, c.year, c.section),
+          studentCount: c.studentCount ?? null,
           requirements: reqs,
           totalHours: reqs.reduce((sum, r) => sum + r.hours, 0),
         };
@@ -906,6 +979,7 @@ function classBody(body: {
   section?: string;
   programme?: string;
   semesterNumber?: number | null;
+  studentCount?: number | null;
 }) {
   return {
     program: body.program,
@@ -913,6 +987,7 @@ function classBody(body: {
     section: body.section ?? "",
     programme: body.programme ?? body.program,
     semesterNumber: body.semesterNumber ?? parseSemesterNumber(body.year),
+    studentCount: body.studentCount,
   };
 }
 
@@ -937,6 +1012,12 @@ router.put(
     const body = parse(classSchema, req.body, res);
     if (!body) return;
     const deptId = await activeDeptId();
+    if (deptId && body.studentCount !== undefined) {
+      const previous = await ClassSection.findOne({ _id: req.params.id, ...scope(deptId) });
+      if (previous && (previous.studentCount ?? null) !== body.studentCount && await RoutineEntry.exists({ ...scope(deptId), classId: previous._id })) {
+        return void res.status(409).json({ error: "Clear the department routine before changing the size of a scheduled class." });
+      }
+    }
     const doc = deptId
       ? await ClassSection.findOneAndUpdate(
           { _id: req.params.id, ...scope(deptId) },
@@ -1043,38 +1124,69 @@ router.put(
 );
 
 // ------------------------------------------------------------------ routine
-async function populatedEntries() {
-  const filter = await readFilter();
-  const [entries, subjects, teachers, classes] = await Promise.all([
-    RoutineEntry.find(filter).lean(),
-    Subject.find(filter).lean(),
-    Teacher.find(filter).lean(),
-    ClassSection.find(filter).lean(),
-  ]);
-  const sById = new Map(subjects.map((s) => [s._id.toString(), s]));
-  const tById = new Map(teachers.map((t) => [t._id.toString(), t]));
-  const cById = new Map(classes.map((c) => [c._id.toString(), c]));
-  return entries.map((e) => {
-    const s = sById.get(e.subjectId.toString());
-    const t = tById.get(e.teacherId.toString());
-    const c = cById.get(e.classId.toString());
-    return {
-      id: e._id.toString(),
-      classId: e.classId.toString(),
-      subjectId: e.subjectId.toString(),
-      teacherId: e.teacherId.toString(),
-      day: e.day,
-      period: e.period,
-      subjectName: s?.name ?? "?",
-      subjectCode: s?.code ?? "?",
-      subjectType: s?.type ?? "theory",
-      sessionHours: s?.sessionHours ?? (s?.type === "lab" ? 3 : 2),
-      teacherName: t?.name ?? "?",
-      teacherCode: t?.code ?? "",
-      className: c ? classLabel(c.program, c.year, c.section) : "?",
-    };
+async function populatedEntries(departmentId?: string, member: { teacherId?: Types.ObjectId; classId?: Types.ObjectId } = {}) {
+  return scheduleWrite(async () => {
+    const department = departmentId ? await Department.findById(departmentId) : await getActiveDepartment();
+    if (!department) return [];
+    const filter = scope(department._id.toString());
+    const [entries, subjects, teachers, classes, rooms] = await Promise.all([
+      RoutineEntry.find({ ...publishedRoutineScope(department), ...member }).lean(),
+      Subject.find(filter).lean(),
+      Teacher.find(filter).lean(),
+      ClassSection.find(filter).lean(),
+      Room.find().lean(),
+    ]);
+    const sById = new Map(subjects.map((s) => [s._id.toString(), s]));
+    const tById = new Map(teachers.map((t) => [t._id.toString(), t]));
+    const cById = new Map(classes.map((c) => [c._id.toString(), c]));
+    const roomById = new Map(rooms.map((room) => [room._id.toString(), room]));
+    return entries.map((e) => {
+      const s = sById.get(e.subjectId.toString());
+      const t = tById.get(e.teacherId.toString());
+      const c = cById.get(e.classId.toString());
+      const room = e.roomId && roomById.get(e.roomId.toString());
+      return {
+        id: e._id.toString(),
+        classId: e.classId.toString(),
+        subjectId: e.subjectId.toString(),
+        teacherId: e.teacherId.toString(),
+        roomNumber: room?.number ?? null,
+        roomFloor: room?.floor ?? null,
+        roomCapacity: room?.capacity ?? null,
+        sessionId: e.sessionId,
+        day: e.day,
+        period: e.period,
+        subjectName: s?.name ?? "?",
+        subjectCode: s?.code ?? "?",
+        subjectType: s?.type ?? "theory",
+        sessionHours: s?.sessionHours ?? (s?.type === "lab" ? 3 : 2),
+        teacherName: t?.name ?? "?",
+        teacherCode: t?.code ?? "",
+        className: c ? classLabel(c.program, c.year, c.section) : "?",
+      };
+    });
   });
 }
+
+export const personalRoutineRouter = Router();
+personalRoutineRouter.get("/", wrap(async (_req, res) => {
+  res.set("Cache-Control", "private, no-store");
+  const { role, memberId } = accountFor(res);
+  if (!memberId || role === "admin") return void res.json({ linked: false, entries: [] });
+  const target = role === "teacher"
+    ? await Teacher.findOne({ _id: memberId, isPlaceholder: { $ne: true } }).lean()
+    : await ClassSection.findById(memberId).lean();
+  if (!target) return void res.json({ linked: false, entries: [] });
+  const departmentId = target.departmentId.toString();
+  if (!await Department.exists({ _id: target.departmentId, parentDepartmentId: null })) {
+    return void res.json({ linked: false, entries: [] });
+  }
+  const [config, entries] = await Promise.all([
+    mergedScheduleConfig(departmentId),
+    populatedEntries(departmentId, role === "teacher" ? { teacherId: memberId } : { classId: memberId }),
+  ]);
+  res.json({ linked: true, config, entries: entries.filter((entry) => entry.roomNumber !== null) });
+}));
 
 router.get(
   "/routine",
@@ -1133,20 +1245,34 @@ router.post(
   wrap(async (_req, res) => {
     const deptId = await requireActiveDept(res);
     if (!deptId) return;
-    const data = await loadSolverData();
-    const result = solve(data.teachers, data.subjects, data.classSubjects, data.config, 10);
-    await RoutineEntry.deleteMany(scope(deptId));
-    if (result.entries.length) {
-      await RoutineEntry.insertMany(
-        result.entries.map((e) => ({
-          departmentId: new Types.ObjectId(deptId),
-          classId: e.classId,
-          subjectId: e.subjectId,
-          teacherId: e.teacherId,
-          day: e.day,
-          period: e.period,
-        })),
-      );
+    const data = await loadSolverData(deptId);
+    const rooms = await roomConstraints(deptId, data.classSizes);
+    const checkRooms = rooms.rooms.length > 0 || Boolean(res.locals.account);
+    if (checkRooms) {
+      const problems = new Set<string>();
+      for (const { classId, subjectId } of data.classSubjects) {
+        const size = data.classSizes.get(classId);
+        const name = data.classNames.get(classId) ?? "Unknown class";
+        const type = data.subjects.get(subjectId)?.type;
+        if (!size) problems.add(`${name}: enter the student count on the Classes page.`);
+        else if (type && !rooms.rooms.some((room) => room.type === type && room.capacity >= size)) {
+          problems.add(`${name}: no ${type === "lab" ? "lab" : "classroom"} has ${size} seats.`);
+        }
+      }
+      if (problems.size) return void res.status(400).json({ error: [...problems].join("\n") });
+    }
+    const result = solve(data.teachers, data.subjects, data.classSubjects, data.config, 10, checkRooms ? rooms : undefined);
+    if (result.success) {
+      const filter = scope(deptId);
+      const publicationId = new Types.ObjectId();
+      try {
+        await RoutineEntry.insertMany(result.entries.map((e) => ({ ...e, publicationId, departmentId: filter.departmentId })));
+        await Department.findByIdAndUpdate(deptId, { publicationId });
+      } catch (error) {
+        await RoutineEntry.deleteMany({ ...filter, publicationId });
+        throw error;
+      }
+      await RoutineEntry.deleteMany({ ...filter, publicationId: { $ne: publicationId } });
     }
     const totalPeriods = data.classSubjects.reduce((sum, cs) => sum + cs.hours, 0);
     res.json({
@@ -1165,7 +1291,7 @@ router.post(
       })),
       message: result.success
         ? `Routine generated: ${result.entries.length}/${totalPeriods} hours placed (${result.placements.length}/${result.totalJobs} sessions) in ${result.elapsedSeconds.toFixed(2)}s, search nodes ${result.nodes}. Zero hard-rule violations.`
-        : `Partial routine: ${result.entries.length}/${totalPeriods} hours placed. Some sessions could not be placed — see unplaced list.`,
+        : `The solver placed ${result.entries.length}/${totalPeriods} hours. Review unplaced sessions and try again.`,
     });
   }),
 );
@@ -1180,15 +1306,35 @@ router.post(
 );
 
 async function entriesAsLikes(): Promise<EntryLike[]> {
-  const docs = await RoutineEntry.find(await readFilter()).lean();
+  const department = await getActiveDepartment();
+  if (!department) return [];
+  const docs = await RoutineEntry.find(publishedRoutineScope(department)).lean();
   return docs.map((e) => ({
     id: e._id.toString(),
     classId: e.classId.toString(),
     subjectId: e.subjectId.toString(),
     teacherId: e.teacherId.toString(),
+    roomId: e.roomId?.toString(),
+    sessionId: e.sessionId,
     day: e.day,
     period: e.period,
   }));
+}
+
+async function movedRoomProblem(entries: EntryLike[], movingIds: string[]) {
+  const rooms = [...new Set(entries.flatMap((entry) => entry.roomId ? [entry.roomId] : []))];
+  if (!rooms.length) return null;
+  const active = await getActiveDepartment();
+  if (!active) return null;
+  const other = await otherRoomReservations(active._id.toString());
+  const bookings = await RoutineEntry.find({ $or: [active, ...other].map(publishedRoutineScope), roomId: { $in: rooms }, _id: { $nin: movingIds } }).lean();
+  for (const entry of entries) {
+    if (!entry.roomId) continue;
+    const conflict = bookings.some((other) => other.roomId?.toString() === entry.roomId && other.day === entry.day && other.period === entry.period)
+      || entries.some((other) => other.id !== entry.id && other.roomId === entry.roomId && other.day === entry.day && other.period === entry.period);
+    if (conflict) return `The assigned room is already in use on ${entry.day} at period ${entry.period}.`;
+  }
+  return null;
 }
 
 router.post(
@@ -1197,6 +1343,7 @@ router.post(
     const body = parse(moveSchema, req.body, res);
     if (!body) return;
     const [entries, data] = await Promise.all([entriesAsLikes(), loadSolverData()]);
+    if (!data.config.days.includes(body.day)) return void res.status(400).json({ error: "Choose a teaching day." });
     const entry = entries.find((e) => e.id === body.entryId);
     if (!entry) return void res.status(404).json({ error: "Entry not found." });
     // A move moves the WHOLE session block the entry belongs to;
@@ -1215,6 +1362,8 @@ router.post(
       { periodsPerDay: data.config.periodsPerDay, lunchAfter: data.config.lunchAfter },
     );
     if (reason) return void res.status(409).json({ error: `Move rejected: ${reason}` });
+    const roomProblem = await movedRoomProblem(block.map((e, i) => ({ ...e, day: body.day, period: body.period + i })), [...blockIds]);
+    if (roomProblem) return void res.status(409).json({ error: `Move rejected: ${roomProblem}` });
     for (let i = 0; i < block.length; i++) {
       await RoutineEntry.findByIdAndUpdate(block[i].id, { day: body.day, period: body.period + i });
     }
@@ -1269,6 +1418,8 @@ router.post(
           [...rest, ...movedA], info(blockB), startA.day, startA.period, data.teachers, data.subjects, grid,
         );
     if (r1 || r2) return void res.status(409).json({ error: `Swap rejected: ${r1 ?? r2}` });
+    const roomProblem = await movedRoomProblem([...movedA, ...movedB], [...idsA, ...idsB]);
+    if (roomProblem) return void res.status(409).json({ error: `Swap rejected: ${roomProblem}` });
     for (let i = 0; i < blockA.length; i++) {
       await RoutineEntry.findByIdAndUpdate(blockA[i].id, { day: startB.day, period: startB.period + i });
     }
@@ -1297,6 +1448,7 @@ async function balanceFromDb(): Promise<BalanceReport> {
     ClassSubject.find(filter).lean(),
   ]);
   const codeBySubjectId = new Map(subjectDocs.map((s) => [s._id.toString(), s.code]));
+  const subjectById = new Map(subjectDocs.map((s) => [s._id.toString(), s]));
   const labelByClassId = new Map(
     classDocs.map((c) => [c._id.toString(), classLabel(c.program, c.year, c.section)]),
   );
@@ -1315,7 +1467,7 @@ async function balanceFromDb(): Promise<BalanceReport> {
       .map((cs) => ({
         classLabel: labelByClassId.get(cs.classId.toString()) ?? "?",
         subjectCode: codeBySubjectId.get(cs.subjectId.toString()) ?? "?",
-        hours: cs.hours,
+        hours: scheduledWeeklyHours(cs.hours, subjectById.get(cs.subjectId.toString())),
       })),
   };
   return computeBalance(input);
@@ -1342,7 +1494,7 @@ router.post(
     // Normalise Zod defaults into concrete locals.
     const body = {
       classes: (raw.classes ?? []).map((c) => ({ ...c, section: c.section ?? "" })),
-      subjects: raw.subjects.map((s) => ({ ...s, name: s.name ?? "" })),
+      subjects: raw.subjects.map((s) => ({ ...s, name: s.name ?? "", type: s.type ?? "theory" })),
       teachers: raw.teachers.map((t) => ({
         ...t,
         name: t.name ?? "",
@@ -1354,6 +1506,7 @@ router.post(
 
     const problems: string[] = [];
     const subjectCodes = new Map<string, string>(); // upper-cased -> display code
+    const subjectsByCode = new Map(body.subjects.map((subject) => [subject.code.toUpperCase(), subject]));
     for (const s of body.subjects) {
       const k = s.code.toUpperCase();
       if (subjectCodes.has(k)) problems.push(`Duplicate course code "${s.code}".`);
@@ -1397,7 +1550,7 @@ router.post(
                 )
               : `Class ${m.classIndex + 1}`,
           subjectCode: m.subjectCode,
-          hours: m.hours,
+          hours: scheduledWeeklyHours(m.hours, subjectsByCode.get(m.subjectCode.toUpperCase())),
         })),
     };
     res.json(computeBalance(input));

@@ -79,8 +79,8 @@ Verified end-to-end (integration tests + production build,
 in-memory Mongo): a sample ECE setup (2 classes, 5 courses incl. 1
 lab, 4 teachers) validates clean, generates with **0 unplaced**, and
 the master API carries the ECE masthead data — while the NITA CSE
-department, including its generated 346-entry routine, stays fully
-intact next to it (346/346 hours, 180/180 sessions). Switching back
+department, including its generated routine, stays fully
+intact next to it. Switching back
 and forth loses nothing; re-seeding CSE refreshes CSE only.
 
 ## Setting up from the syllabus — the guided flow
@@ -174,16 +174,15 @@ language and the same data shapes.
 |----------|--------|
 | Frontend | React 18 + Vite + TypeScript + Tailwind CSS, React Router, Axios + TanStack React Query, Lucide icons |
 | Backend  | Node.js + Express 4 + TypeScript, Zod validation on every input |
-| Database | MongoDB via Mongoose (Atlas in production; in-memory locally) |
+| Database | MongoDB via Mongoose (Atlas in production; persistent local MongoDB for development) |
 | Solver   | Custom constraint solver in `server/src/solver/` — no external library |
 | Tests    | Vitest — 49 tests: solver invariants + block-session model, catalogue integrity, multi-department storage and guided setup (integration ones use in-memory Mongo) |
 
 ## Quick start (zero setup)
 
 Requires Node 18+. No database account needed for a local run: when
-`MONGODB_URI` is unset the server starts an **in-memory MongoDB**
-(`mongodb-memory-server`) automatically. Data resets on restart in
-that mode.
+`MONGODB_URI` is unset the server starts a local MongoDB instance and
+stores data in `.local/mongodb` in the project. Data persists across restarts.
 
 ```bash
 npm install          # installs both workspaces (server + client)
@@ -191,10 +190,17 @@ npm run build        # builds client (client/dist) and server (server/dist)
 npm start            # one process, one URL: http://localhost:4000
 ```
 
+### Accounts and room scheduling
+
+- Create an **Administrator** account at `/signup`. On a local run, copy the signup code from `.local/admin-signup-code`. On a deployment, set `ADMIN_SIGNUP_CODE` in the environment before creating an administrator.
+- Teachers and students can sign up with their respective account types. In **Accounts**, the administrator links each teacher to a faculty record and each student to a class section in the active department.
+- In **Rooms**, check room numbers, floors, types, and capacities. The preloaded second-floor numbers and extra rooms G-8, 125, 225, and 226 are editable planning entries. Each preloaded lab has 60 seats.
+- In **Classes**, enter the student count for every section being scheduled. Generation checks the headcount against the room type and capacity, and rules out double-booked rooms across departments. A successful run publishes the timetable to the linked accounts. An incomplete run keeps the previous timetable available.
+
 Development (hot reload, two processes):
 
 ```bash
-npm run dev          # API on :4000 (tsx watch, in-memory Mongo)
+npm run dev          # API on :4000 (tsx watch, persistent local MongoDB)
 npm run dev:client   # Vite on :5173, /api proxied to :4000
 ```
 
@@ -212,19 +218,20 @@ npm test             # vitest: 49 tests
 
 ## Demo walkthrough (5 steps)
 
-1. Open the app → **Load NIT Agartala CSE Data** (the real NITA CSE
-   department dataset: 42 faculty with their sheet codes — DJB, PB,
+1. Sign in as an administrator. A fresh database automatically loads only
+   the NITA CSE dataset: 42 faculty with their sheet codes — DJB, PB,
    MKDB, TP, … (32 from the sheet + 10 generic first-year
-   placeholders) — 69 subjects, 14 classes: B.Tech Sem 1 (Group I +
-   Group II) / 3 / 5 / 7 (A + B), MCA Sem 1 / 3 / 5, M.Tech Sem 1
-   CYSEC / DSE / AI; Mon–Fri, hourly grid from 9:00, lunch 1:00–2:00
+   placeholders) — 69 subjects, 17 classes. B.Tech Sem 1 (Group I +
+   Group II) and Sem 3 / 5 / 7 (A + B) have 60 students per section.
+   MCA Sem 1 / 3 / 5 have two sections of 30 each. M.Tech Sem 1
+   CYSEC / DSE / AI have 15 students each. Mon–Fri, hourly grid from 9:00, lunch 1:00–2:00
    after P4; theory subjects run 2h sessions, labs single 3h blocks,
-   syllabus-derived hours and credits throughout). Assignments
+   syllabus-derived hours and credits throughout. Assignments
    follow the ones printed on the real sheet wherever it names a
    teacher: MCA Sem 5 AI / AI Lab = DJB, CD / CD Lab = PB,
    WCN = MKDB, DIP = TP; B.Tech DBMS = SN, OS = SDB,
    ML 7A = KC / 7B = AJ, M.Tech CRYPTO = NK, …
-2. Open **Validation** — demand vs eligible-teacher capacity per subject.
+2. Review the preloaded sizes in **Classes** and teacher capacity in **Validation**.
 3. Click **Generate Routine**.
 4. View the **Master sheet** (NITA format, below) / By Class / By
    Teacher routines (teacher load totals included), export CSV from
@@ -235,10 +242,7 @@ npm test             # vitest: 49 tests
    rejected: A 3h session starting at Monday P3 would cross the lunch
    break."*).
 
-**Measured on the NITA demo data** (actual runs of this codebase):
-the full CSE department solves to **346/346 hours (180/180
-sessions), 0 unplaced**, search **182 nodes** (no backtracking
-needed), **≈0.03 s**. All **49/49 tests pass**.
+The preloaded sections schedule **400 teaching hours across 208 sessions**.
 
 ## Session model (the real sheet's blocks, not single periods)
 
@@ -251,14 +255,14 @@ editable on the Subjects page):
 - **Lab: 2–3 consecutive hours, default 3** (3h blocks sit 9–12 or
   2–5 on the real sheet; 2h labs like `AI Lab` 11–1 exist too).
 
-A class-subject's weekly hours split into sessions of that length,
-plus **one shorter remainder session** when they don't divide evenly
-(theory 4h @2 → 2+2; theory 3h @2 → 2+1; lab 3h @3 → one block).
+Theory hours split into sessions of that length, with a shorter
+remainder when needed (4h @2 → 2+2; 3h @2 → 2+1). Each section has
+**one block per lab subject per week**, capped at the lab's session
+length. A lab recorded as 6h with 3h sessions occupies one 3h block.
 A session must sit entirely inside the morning segment (P1–P4) or the
 afternoon segment (P5–P7) — **no session ever crosses lunch**, so a
 3h block can only start at P1, P2 or P5. In the demo seed the MCA
-classes each run 14 sessions/week (Sem 1 = 31h, Sem 3 = 31h,
-Sem 5 = 28h); the B.Tech and M.Tech classes follow the same pattern
+classes schedule 25h in Sem 1 and 3 and 22h in Sem 5. The B.Tech and M.Tech classes follow the same pattern
 at their own loads (B.Tech Sem 1 = 25/26h, Sem 3 = 26h, Sem 5 = 28h,
 Sem 7 = 11h — the real 7th-sem sheet carries only ML + electives,
 the rest is project work; M.Tech Sem 1 = 25h).
@@ -298,9 +302,8 @@ The Master Routine page reproduces the department's real sheet:
 the header comment is the design doc. In short:
 
 1. **Expand** — each class–subject requirement becomes session jobs:
-   weekly hours split into blocks of the subject's session length
-   (+ one remainder session), each block placed whole, never spanning
-   lunch or a segment boundary.
+   theory can span multiple blocks and labs get one block each week.
+   Every block is placed whole within a teaching segment.
 2. **Order hardest-first** (fail-first): longest sessions → fewest
    eligible teachers → most total hours. Constrained blocks placed
    early leave easy sessions to fill the gaps.
@@ -374,9 +377,13 @@ session block**, and the full span is clash-checked before applying.
 workspaces and Express serves the built client as static files.
 
 ```text
-Build:  npm install && npm run build
+Build:  npm ci --include=dev && npm run build
 Start:  npm start            (PORT comes from the environment)
 ```
+
+The Blueprint generates **`ADMIN_SIGNUP_CODE`** on Render. For a manually
+configured service, set that variable to a secret value in **Environment**.
+Use it when creating an administrator account.
 
 Set **`MONGODB_URI`** in the Render dashboard to your MongoDB Atlas
 connection string. Without it the service still runs, but on in-memory

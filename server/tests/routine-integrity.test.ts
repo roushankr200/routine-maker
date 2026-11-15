@@ -1,20 +1,6 @@
 /**
- * Routine integrity — regression tests for two user reports (2026-11-11):
- *
- *  1. "MCA has 2 labs but only 1 lab shows in the week." The generated
- *     data was always correct — every 0-0-6 lab subject is placed as
- *     exactly 2 sessions x 3h — the second (afternoon) lab was hidden
- *     by a master-sheet rendering bug (fixed client-side). These tests
- *     lock the DATA side in: per class-subject, placed hours equal the
- *     required hours, and every LAB subject's placed session count
- *     equals splitSessions(hours, sessionHours).
- *
- *  2. "Classes appear in lunch time." No placed session block may
- *     cross the lunch break: blocks are reconstructed from the
- *     flattened entries per class/day and none may span lunchAfter.
- *
- * Integration style mirrors departments.test.ts: real app + in-memory
- * Mongo, CSE seed, one generation.
+ * Routine integrity regression tests for scheduling one block per lab
+ * subject per section and keeping every block within one teaching segment.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { Server } from "node:http";
@@ -22,7 +8,8 @@ import mongoose from "mongoose";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import { createApp } from "../src/app.js";
 import { backfillLegacyData } from "../src/departments.js";
-import { splitSessions } from "../src/solver/solver.js";
+import { RoutineEntry } from "../src/models.js";
+import { normalizeSavedLabSessions } from "../src/savedLabSessions.js";
 
 let mongod: MongoMemoryServer;
 let server: Server;
@@ -40,6 +27,7 @@ async function req(method: string, path: string, body?: unknown) {
 
 interface ReqRow {
   subjectId: string;
+  recordedHours: number;
   hours: number;
   code: string;
   type: "theory" | "lab";
@@ -51,6 +39,7 @@ interface ClassRow {
   requirements: ReqRow[];
 }
 interface EntryRow {
+  sessionId: number;
   classId: string;
   subjectId: string;
   teacherId: string;
@@ -73,7 +62,7 @@ interface Block {
 /**
  * Reconstruct session blocks from flattened hourly entries: a block is
  * a maximal run of consecutive periods on one day for one class with
- * the same subject AND teacher (the same rule the client grids use).
+ * the same generated session ID (the same rule the client grids use).
  */
 function blocksOf(entries: EntryRow[]): Block[] {
   const blocks: Block[] = [];
@@ -93,8 +82,7 @@ function blocksOf(entries: EntryRow[]): Block[] {
       while (
         i + length < sorted.length &&
         sorted[i + length].period === first.period + length &&
-        sorted[i + length].subjectId === first.subjectId &&
-        sorted[i + length].teacherId === first.teacherId
+        sorted[i + length].sessionId === first.sessionId
       ) {
         length++;
       }
@@ -121,7 +109,7 @@ beforeAll(async () => {
   });
   await mongoose.connect(mongod.getUri("routine-maker-integrity-test"));
   await backfillLegacyData();
-  server = createApp().listen(0);
+  server = createApp({ allowAnonymous: true }).listen(0);
   const addr = server.address();
   if (!addr || typeof addr === "string") throw new Error("no port");
   base = `http://127.0.0.1:${addr.port}`;
@@ -149,7 +137,7 @@ afterAll(async () => {
 
 describe("CSE seed routine integrity", () => {
   it("places every required hour of every class-subject", () => {
-    expect(routine.entries.length).toBe(346); // seed total, known-good
+    expect(routine.entries.length).toBe(400);
     const placed = new Map<string, number>();
     for (const e of routine.entries) {
       const key = `${e.classId}|${e.subjectId}`;
@@ -167,7 +155,7 @@ describe("CSE seed routine integrity", () => {
     expect(mismatches).toEqual([]);
   });
 
-  it("every LAB subject is placed as splitSessions(hours, sessionHours) sessions per week", () => {
+  it("places each lab subject exactly once per section", () => {
     const labBlocks = new Map<string, number>();
     for (const b of blocks) {
       const key = `${b.classId}|${b.subjectId}`;
@@ -179,7 +167,7 @@ describe("CSE seed routine integrity", () => {
       for (const r of c.requirements) {
         if (r.type !== "lab") continue;
         labCount++;
-        const expected = splitSessions(r.hours, r.sessionHours).length;
+        const expected = r.hours > 0 ? 1 : 0;
         const got = labBlocks.get(`${c.id}|${r.subjectId}`) ?? 0;
         if (got !== expected) {
           mismatches.push(
@@ -192,25 +180,34 @@ describe("CSE seed routine integrity", () => {
     expect(mismatches).toEqual([]);
   });
 
-  it("MCA 6h labs (0-0-6) are placed as exactly 2 sessions of 3h in the week", () => {
-    // The user's exact case: MCA labs are 6 weekly hours at 3h per
-    // session — BOTH sessions must be in the generated week.
+  it("shows one 3h session for a recorded 6h MCA lab", () => {
     const mcaLabs: Array<{ cls: string; code: string }> = [];
     for (const c of classes) {
       if (!c.name.includes("MCA")) continue;
       for (const r of c.requirements) {
-        if (r.type === "lab" && r.hours === 6 && r.sessionHours === 3) {
+        if (r.type === "lab" && r.recordedHours === 6 && r.sessionHours === 3) {
           mcaLabs.push({ cls: c.name, code: r.code });
           const mine = blocks.filter((b) => b.classId === c.id && b.subjectId === r.subjectId);
           expect(
             mine.map((b) => b.length).sort(),
             `${c.name} ${r.code} session lengths`,
-          ).toEqual([3, 3]);
+          ).toEqual([3]);
         }
       }
     }
     // DFS Lab, WT Lab, DAA Lab, SE Lab, CD Lab, AI Lab across MCA 1/3/5.
     expect(mcaLabs.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("removes an extra lab block from an old timetable without moving other entries", async () => {
+    const original = await RoutineEntry.find().lean();
+    const labIds = new Set(classes.flatMap((cls) => cls.requirements.filter((r) => r.type === "lab").map((r) => r.subjectId)));
+    const entry = original.find((e) => labIds.has(e.subjectId.toString()) && e.day !== routine.config.days.at(-1))!;
+    const block = original.filter((e) => e.sessionId === entry.sessionId);
+    await RoutineEntry.insertMany(block.map(({ _id, ...row }) => ({ ...row, day: routine.config.days.at(-1), sessionId: 1000 })));
+    expect(await normalizeSavedLabSessions()).toBe(block.length);
+    expect((await RoutineEntry.find().lean()).map((e) => e._id.toString()).sort()).toEqual(original.map((e) => e._id.toString()).sort());
+    expect(await normalizeSavedLabSessions()).toBe(0);
   });
 
   it("no placed session block crosses the lunch break", () => {

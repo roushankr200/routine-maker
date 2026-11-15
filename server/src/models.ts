@@ -21,6 +21,10 @@ import mongoose, { HydratedDocument, Schema, Types } from "mongoose";
  * removed only by the explicit DELETE /api/departments/:id action.
  */
 export interface IDepartment {
+  publicationId?: Types.ObjectId;
+  parentDepartmentId?: Types.ObjectId;
+  variationName?: string;
+  variationKey?: string;
   name: string;
   shortName: string;
   /** Session label printed on the master sheet, e.g. "ODD 2026". */
@@ -32,6 +36,10 @@ export interface IDepartment {
 }
 const departmentSchema = new Schema<IDepartment>(
   {
+    publicationId: Schema.Types.ObjectId,
+    parentDepartmentId: { type: Schema.Types.ObjectId, ref: "Department", index: true },
+    variationName: String,
+    variationKey: String,
     name: { type: String, required: true },
     shortName: { type: String, required: true },
     session: { type: String, default: "ODD 2026" },
@@ -39,6 +47,9 @@ const departmentSchema = new Schema<IDepartment>(
   },
   { timestamps: true },
 );
+departmentSchema.index({ parentDepartmentId: 1, variationKey: 1 }, {
+  unique: true, partialFilterExpression: { parentDepartmentId: { $type: "objectId" } },
+});
 export const Department = mongoose.model<IDepartment>("Department", departmentSchema);
 
 const departmentRef = {
@@ -112,6 +123,7 @@ export const Subject = mongoose.model<ISubject>("Subject", subjectSchema);
 
 export interface IClassSection {
   departmentId: Types.ObjectId;
+  studentCount: number | null;
   program: string;
   year: string;
   section: string;
@@ -126,6 +138,7 @@ export interface IClassSection {
 }
 const classSectionSchema = new Schema<IClassSection>({
   departmentId: departmentRef,
+  studentCount: { type: Number, default: null },
   program: { type: String, required: true },
   year: { type: String, required: true },
   section: { type: String, default: "" },
@@ -143,12 +156,14 @@ export interface IClassSubject {
   departmentId: Types.ObjectId;
   classId: Types.ObjectId;
   subjectId: Types.ObjectId;
+  teacherId?: Types.ObjectId;
   hours: number;
 }
 const classSubjectSchema = new Schema<IClassSubject>({
   departmentId: departmentRef,
   classId: { type: Schema.Types.ObjectId, ref: "ClassSection", required: true },
   subjectId: { type: Schema.Types.ObjectId, ref: "Subject", required: true },
+  teacherId: { type: Schema.Types.ObjectId, ref: "Teacher" },
   hours: { type: Number, required: true },
 });
 classSubjectSchema.index({ classId: 1, subjectId: 1 }, { unique: true });
@@ -218,6 +233,9 @@ export const Config = mongoose.model<IConfig>("Config", configSchema);
 
 export interface IRoutineEntry {
   departmentId: Types.ObjectId;
+  roomId?: Types.ObjectId;
+  publicationId?: Types.ObjectId;
+  sessionId?: number;
   classId: Types.ObjectId;
   subjectId: Types.ObjectId;
   teacherId: Types.ObjectId;
@@ -226,12 +244,16 @@ export interface IRoutineEntry {
 }
 const routineEntrySchema = new Schema<IRoutineEntry>({
   departmentId: departmentRef,
+  roomId: { type: Schema.Types.ObjectId, ref: "Room", index: true },
+  publicationId: Schema.Types.ObjectId,
+  sessionId: Number,
   classId: { type: Schema.Types.ObjectId, ref: "ClassSection", required: true },
   subjectId: { type: Schema.Types.ObjectId, ref: "Subject", required: true },
   teacherId: { type: Schema.Types.ObjectId, ref: "Teacher", required: true },
   day: { type: String, required: true },
   period: { type: Number, required: true },
 });
+routineEntrySchema.index({ departmentId: 1, publicationId: 1 });
 export const RoutineEntry = mongoose.model<IRoutineEntry>("RoutineEntry", routineEntrySchema);
 
 export type ConfigDoc = HydratedDocument<IConfig>;

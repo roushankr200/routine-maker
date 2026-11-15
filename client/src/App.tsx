@@ -10,8 +10,14 @@ import MasterRoutine from "./pages/MasterRoutine";
 import ByClass from "./pages/ByClass";
 import ByTeacher from "./pages/ByTeacher";
 import Validation from "./pages/Validation";
+import AccountAccess, { AccountGate } from "./pages/AccountAccess";
+import Accounts from "./pages/Accounts";
+import Rooms from "./pages/Rooms";
 
 const router = createBrowserRouter([
+  { path: "/login", element: <AccountAccess /> },
+  { path: "/signup", element: <AccountAccess /> },
+  { element: <AccountGate />, children: [
   {
     path: "/",
     element: <Layout />,
@@ -21,6 +27,8 @@ const router = createBrowserRouter([
       { path: "teachers/:id/availability", element: <Availability /> },
       { path: "subjects", element: <Subjects /> },
       { path: "classes", element: <Classes /> },
+      { path: "rooms", element: <Rooms /> },
+      { path: "accounts", element: <Accounts /> },
       { path: "setup", element: <UnifiedSetup /> },
       // v2.4: ONE setup — the old guided/wizard URLs land on it.
       { path: "setup/wizard", element: <Navigate to="/setup" replace /> },
@@ -31,6 +39,7 @@ const router = createBrowserRouter([
       { path: "validation", element: <Validation /> },
     ],
   },
+  ] },
 ]);
 
 export default function App() {

@@ -1,4 +1,5 @@
 export interface ScheduleConfig {
+  variationName?: string;
   days: string[];
   periodsPerDay: number;
   lunchAfter: number | null;
@@ -40,6 +41,7 @@ export interface Subject {
 }
 
 export interface ClassRequirement {
+  recordedHours?: number;
   subjectId: string;
   hours: number;
   name: string;
@@ -51,6 +53,7 @@ export interface ClassRequirement {
 }
 
 export interface ClassSection {
+  studentCount?: number | null;
   id: string;
   program: string;
   year: string;
@@ -97,6 +100,15 @@ export interface CatalogueSubject {
   weeklyHours: number | null;
   sessionHours: number | null;
   electivePool?: CatalogueElectiveOption[];
+}
+
+export interface PreviousAssignment {
+  programme: string;
+  semester: number;
+  section: string;
+  subjectCode: string;
+  syllabusCode: string;
+  teacher: { name: string; code: string; designation: string; weeklyHours: number };
 }
 
 export interface CatalogueSemester {
@@ -167,6 +179,7 @@ export interface CustomSubjectPayload {
 
 /** POST /api/setup/guided payload — the ONE unified setup (v2.4). */
 export interface GuidedSetupPayload {
+  variationName?: string;
   catalogueId?: string;
   facultyDeptId?: string;
   department: { name: string; short: string; session: string; effectiveFrom: string };
@@ -205,6 +218,7 @@ export interface GuidedSetupPayload {
 export interface GuidedSetupResult {
   message: string;
   departmentId: string;
+  variationName?: string | null;
   counts: {
     teachers: number;
     subjects: number;
@@ -221,6 +235,10 @@ export interface GuidedSetupResult {
 }
 
 export interface RoutineEntry {
+  sessionId?: number;
+  roomNumber?: string | null;
+  roomFloor?: number | null;
+  roomCapacity?: number | null;
   id: string;
   classId: string;
   subjectId: string;
@@ -234,6 +252,22 @@ export interface RoutineEntry {
   teacherName: string;
   teacherCode: string;
   className: string;
+}
+
+export interface Account {
+  id: string;
+  name: string;
+  email: string;
+  role: "admin" | "teacher" | "student";
+  memberId: string | null;
+}
+
+export interface Room {
+  id: string;
+  number: string;
+  floor: number;
+  capacity: number;
+  type: "theory" | "lab";
 }
 
 export interface GenerateResult {
@@ -306,6 +340,8 @@ export interface DepartmentSummary {
   id: string;
   name: string;
   shortName: string;
+  parentDepartmentId: string | null;
+  variationName: string | null;
   session: string;
   effectiveFrom: string;
   createdAt: string;

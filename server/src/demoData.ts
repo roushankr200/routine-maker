@@ -11,7 +11,7 @@
  * elective picks, and teacher load caps.
  *
  * The seed covers the whole CSE department on one master grid —
- * 14 classes: B.Tech Sem 1 (Group I + Group II), Sem 3/5/7 A+B ·
+ * 17 classes: B.Tech Sem 1 (Group I + Group II), Sem 3/5/7 A+B ·
  * MCA Sem 1/3/5 · M.Tech Sem 1 CYSEC / DSE / AI. (BTMT and MBA
  * cohorts also appear on the real sheet; they belong to other
  * departments and are out of scope for the CSE seed.)
@@ -33,7 +33,7 @@
  * CYSEC = ACN + DH, DSE = NLP + IR.
  *
  * Catalogue hours differ from the old hand-tuned seed where the
- * syllabus says so: MCA labs are 0-0-6 (two 3h sessions/week),
+ * syllabus says so: MCA labs are recorded as 0-0-6 (one scheduled 3h block),
  * M.Tech labs are 0-0-2 (one 2h session), B.Tech Sem 7 keeps only
  * ML + IPR + two electives (the rest is project work, not
  * timetabled). Subject codes are shared across classes exactly
@@ -89,7 +89,7 @@ interface SeedClassDef {
   electivePicks: Record<string, string>;
 }
 
-const SEED_CLASS_DEFS: SeedClassDef[] = [
+const SEED_COHORT_DEFS: SeedClassDef[] = [
   { programme: "B.Tech", semester: 1, section: "Group I", group: "I", electivePicks: {} },
   { programme: "B.Tech", semester: 1, section: "Group II", group: "II", electivePicks: {} },
   { programme: "B.Tech", semester: 3, section: "A", electivePicks: {} },
@@ -139,6 +139,12 @@ const SEED_CLASS_DEFS: SeedClassDef[] = [
   },
 ];
 
+const SEED_CLASS_DEFS = SEED_COHORT_DEFS.flatMap((cohort) =>
+  cohort.programme === "MCA"
+    ? ["A", "B"].map((section) => ({ ...cohort, section }))
+    : [cohort],
+);
+
 /** [name, code, type, sessionHours, credits, syllabusCode] — derived from the catalogue. */
 export type DemoSubjectTuple = [string, string, "theory" | "lab", number, number, string];
 
@@ -146,8 +152,8 @@ const derivedSubjects = new Map<string, DemoSubjectTuple>();
 
 /**
  * Per class (same order as DEMO_CLASSES): subject code -> hours/week,
- * resolved from the catalogue (weeklyHours = L+T+P; MCA labs 6h split
- * into two 3h sessions by the solver, M.Tech labs one 2h session).
+ * resolved from the catalogue (weeklyHours = L+T+P). The solver caps labs
+ * at one session per week.
  */
 export const DEMO_CLASS_SUBJECTS: Array<Record<string, number>> = SEED_CLASS_DEFS.map((def) => {
   const prog = findProgramme(CSE_CATALOGUE, def.programme, def.specialisation);
@@ -177,9 +183,12 @@ export const DEMO_CLASS_SUBJECTS: Array<Record<string, number>> = SEED_CLASS_DEF
 /** All seed subjects (unique by code, first programme wins), catalogue-derived. */
 export const DEMO_SUBJECTS: DemoSubjectTuple[] = [...derivedSubjects.values()];
 
-/** [program, year, section, semesterNumber] */
-export const DEMO_CLASSES: Array<[string, string, string, number]> = SEED_CLASS_DEFS.map(
-  (def) => [def.programme, `Sem ${def.semester}`, def.section, def.semester],
+/** [program, year, section, semesterNumber, studentCount] */
+export const DEMO_CLASSES: Array<[string, string, string, number, number]> = SEED_CLASS_DEFS.map(
+  ({ programme, semester, section }) => [
+    programme, `Sem ${semester}`, section, semester,
+    programme === "B.Tech" ? 60 : programme === "MCA" ? 30 : 15,
+  ],
 );
 
 /**

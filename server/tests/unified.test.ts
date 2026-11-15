@@ -57,7 +57,7 @@ beforeAll(async () => {
   });
   await mongoose.connect(mongod.getUri("routine-maker-unified-test"));
   await backfillLegacyData();
-  server = createApp().listen(0);
+  server = createApp({ allowAnonymous: true }).listen(0);
   const addr = server.address();
   if (!addr || typeof addr === "string") throw new Error("no port");
   base = `http://127.0.0.1:${addr.port}`;

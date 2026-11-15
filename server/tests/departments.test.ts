@@ -91,7 +91,7 @@ beforeAll(async () => {
   });
   await mongoose.connect(mongod.getUri("routine-maker-departments-test"));
   await backfillLegacyData();
-  server = createApp().listen(0);
+  server = createApp({ allowAnonymous: true }).listen(0);
   const addr = server.address();
   if (!addr || typeof addr === "string") throw new Error("no port");
   base = `http://127.0.0.1:${addr.port}`;
@@ -104,13 +104,13 @@ afterAll(async () => {
 });
 
 describe("multi-department storage", () => {
-  it("seed creates the CSE department; generating scopes to it (346 entries)", async () => {
+  it("seed creates the CSE department; generating scopes to it (400 entries)", async () => {
     const seed = await req("POST", "/api/seed");
     expect(seed.status).toBe(200);
     const depts = await departments();
     expect(depts).toHaveLength(1);
     expect(depts[0].shortName).toBe("CSE");
-    expect(depts[0].counts).toMatchObject({ teachers: 42, subjects: 69, classes: 14 });
+    expect(depts[0].counts).toMatchObject({ teachers: 42, subjects: 69, classes: 17 });
     expect(depts[0].isActive).toBe(true);
     cseId = depts[0].id;
 
@@ -118,7 +118,7 @@ describe("multi-department storage", () => {
     expect(gen.status).toBe(200);
     expect((gen.json as { success: boolean }).success).toBe(true);
     const routine = await req("GET", "/api/routine");
-    expect((routine.json as { entries: unknown[] }).entries).toHaveLength(346);
+    expect((routine.json as { entries: unknown[] }).entries).toHaveLength(400);
     expect((routine.json as { config: { departmentShort: string } }).config.departmentShort).toBe("CSE");
   });
 
@@ -133,7 +133,7 @@ describe("multi-department storage", () => {
     const cse = depts.find((d) => d.id === cseId)!;
     const ece = depts.find((d) => d.id === eceId)!;
     // CSE fully intact — including its generated routine.
-    expect(cse.counts).toMatchObject({ teachers: 42, subjects: 69, classes: 14, entries: 346 });
+    expect(cse.counts).toMatchObject({ teachers: 42, subjects: 69, classes: 17, entries: 400 });
     expect(ece.counts).toMatchObject({ teachers: 4, subjects: 6, classes: 1 });
     // The new department becomes active.
     expect(ece.isActive).toBe(true);
@@ -152,17 +152,17 @@ describe("multi-department storage", () => {
     const after = await req("GET", "/api/routine");
     expect((after.json as { entries: unknown[] }).entries).toHaveLength(ECE_TOTAL_HOURS);
 
-    // Switch back to CSE: its 42 teachers and 346 routine entries are all still there.
+    // Switch back to CSE: its 42 teachers and 400 routine entries are all still there.
     const act = await req("POST", `/api/departments/${cseId}/activate`);
     expect(act.status).toBe(200);
     const teachers = await req("GET", "/api/teachers");
     expect((teachers.json as unknown[]).length).toBe(42);
     const routine = await req("GET", "/api/routine");
-    expect((routine.json as { entries: unknown[] }).entries).toHaveLength(346);
+    expect((routine.json as { entries: unknown[] }).entries).toHaveLength(400);
 
-    // GET /api/balance is scoped too (CSE demand = 346h).
+    // GET /api/balance is scoped too (CSE demand = 400h).
     const balance = await req("GET", "/api/balance");
-    expect((balance.json as { totals: { requiredHours: number } }).totals.requiredHours).toBe(346);
+    expect((balance.json as { totals: { requiredHours: number } }).totals.requiredHours).toBe(400);
   });
 
   it("re-seeding CSE refreshes ONLY CSE; ECE survives", async () => {
@@ -194,7 +194,7 @@ describe("multi-department storage", () => {
     const depts = await departments();
     expect(depts).toHaveLength(1);
     expect(depts[0].id).toBe(cseId);
-    expect(depts[0].counts).toMatchObject({ teachers: 42, subjects: 69, classes: 14 });
+    expect(depts[0].counts).toMatchObject({ teachers: 42, subjects: 69, classes: 17 });
     expect(depts[0].isActive).toBe(true);
 
     const delLast = await req("DELETE", `/api/departments/${cseId}`);

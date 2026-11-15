@@ -14,9 +14,8 @@ function download(filename: string, rows: string[][]): void {
 
 function cellText(e: RoutineEntry | undefined, mode: "master" | "class" | "teacher"): string {
   if (!e) return "";
-  if (mode === "master") return `${e.subjectCode} (${e.teacherName})`;
-  if (mode === "class") return `${e.subjectCode} (${e.teacherName})`;
-  return `${e.subjectCode} (${e.className})`;
+  const personOrClass = mode === "teacher" ? e.className : e.teacherName;
+  return `${e.subjectCode} (${personOrClass})${e.roomNumber ? ` · Room ${e.roomNumber}` : ""}`;
 }
 
 /** Master CSV: one row per class per day, lunch column included — same shape as the original export. */

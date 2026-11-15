@@ -1,12 +1,14 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { activateDepartment, fetchDepartments } from "../api";
+import { SignOut } from "../pages/AccountAccess";
 import {
   BookOpen,
   CalendarRange,
   ClipboardCheck,
   GraduationCap,
   LayoutDashboard,
+  MapPin,
   Settings2,
   UserRound,
   Users,
@@ -17,6 +19,8 @@ const links = [
   { to: "/teachers", label: "Teachers", icon: Users },
   { to: "/subjects", label: "Subjects", icon: BookOpen },
   { to: "/classes", label: "Classes", icon: GraduationCap },
+  { to: "/rooms", label: "Rooms", icon: MapPin },
+  { to: "/accounts", label: "Accounts", icon: Users },
   { to: "/setup", label: "Set up department", icon: Settings2 },
   { to: "/routine", label: "Master Routine", icon: CalendarRange },
   { to: "/routine/by-class", label: "By Class", icon: GraduationCap },
@@ -32,12 +36,12 @@ export default function Layout() {
   const departments = deptData?.departments ?? [];
   const active = departments.find((d) => d.isActive);
   const deptLine = active
-    ? `${active.shortName} Department · NIT Agartala`
+    ? `${active.shortName} · ${active.variationName ?? "Main routine"}`
     : "NIT Agartala";
 
   const switcher = (
     <div className="px-5 py-3">
-      <label className="label" htmlFor="dept-switcher">Active department</label>
+      <label className="label" htmlFor="dept-switcher">Active routine</label>
       <select
         id="dept-switcher"
         className="input"
@@ -58,7 +62,7 @@ export default function Layout() {
         {departments.length === 0 && <option value="">No departments yet</option>}
         {departments.map((d) => (
           <option key={d.id} value={d.id}>
-            {d.shortName} — {d.name}
+            {d.shortName} — {d.variationName ?? `${d.name} (main)`}
           </option>
         ))}
         <option value="__new__">+ New department…</option>
@@ -71,7 +75,7 @@ export default function Layout() {
   return (
     <div className="flex min-h-screen">
       {/* Sidebar — Swiss/minimal: white, strong grid lines, teal active state */}
-      <aside className="no-print sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-line bg-white md:flex">
+      <aside className="no-print sticky top-0 hidden h-screen w-60 shrink-0 flex-col overflow-y-auto border-r border-line bg-white md:flex">
         <div className="border-b border-line px-5 py-4">
           <div className="font-mono text-lg font-semibold tracking-tight text-primary-dark">
             Routine Maker
@@ -98,14 +102,15 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="mt-auto border-t border-line px-5 py-3 text-xs text-muted">
-          Constraint solver: hardest-first + backtracking · H1–H8 enforced
+        <div className="mt-auto border-t border-line px-5 py-3">
+          <SignOut />
         </div>
       </aside>
 
       <div className="min-w-0 flex-1">
         {/* Mobile top nav */}
         <div className="no-print border-b border-line bg-white px-4 py-3 md:hidden">
+          <div className="float-right"><SignOut /></div>
           <div className="font-mono font-semibold text-primary-dark">Routine Maker</div>
           <p className="text-xs text-muted">{deptLine}</p>
           {switcher}

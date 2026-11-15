@@ -17,7 +17,9 @@ import {
   activateDepartment,
   errorMessage,
   fetchCatalogue,
+  fetchDepartments,
   fetchFaculty,
+  fetchPreviousAssignments,
   fetchRegistry,
   generateRoutine,
   setupGuided,
@@ -29,6 +31,7 @@ import type {
   CustomSubjectPayload,
   GuidedSetupPayload,
   GuidedSetupResult,
+  PreviousAssignment,
 } from "../types";
 
 /**
@@ -70,6 +73,7 @@ interface GTeacher {
   weeklyHours: number;
   /** Set for website-preloaded teachers (server re-resolves the name). */
   facultyCode?: string;
+  fromRoutine?: boolean;
   included: boolean;
 }
 interface SubjectNumbers {
@@ -82,6 +86,7 @@ interface GAssignment {
   electivePick?: string;
   customPick?: { shortCode: string; title: string };
   numbers?: Partial<SubjectNumbers>;
+  fromPool?: boolean;
 }
 interface QueueClass {
   classKey: string;
@@ -108,6 +113,31 @@ interface ManualClass {
 const programmeKey = (programme: string, specialisation?: string) =>
   specialisation ? `${programme}:${specialisation}` : programme;
 const OTHER = "__other__";
+const normalName = (name: string) => name.toLowerCase().replace(/^(dr|mr|mrs|ms)\b\.?\s*/, "").replace(/[^a-z0-9]/g, "");
+
+function scheduledHours(kind: string, weekly: number, session: number | null | undefined) {
+  return kind === "lab" ? Math.min(weekly, session === 2 ? 2 : 3) : weekly;
+}
+
+function suggestedAssignment(
+  rows: PreviousAssignment[], programme: string, semester: number, section: string, subject: CatalogueSubject,
+): { teacherName: string; electivePick?: string } | undefined {
+  const sameProgramme = rows.filter((row) => row.programme === programme);
+  const sameClass = sameProgramme.filter((row) => row.semester === semester && row.section === section);
+  const options = subject.kind === "elective" ? subject.electivePool ?? [] : [subject];
+  const rowsByPriority = subject.kind === "elective" ? [sameClass] : [sameClass,
+    sameProgramme.filter((row) => row.semester === semester), sameProgramme];
+  for (const candidates of rowsByPriority) {
+    const matches = candidates.flatMap((row) => options.flatMap((option) => {
+      const match = (option.syllabusCode && option.syllabusCode === row.syllabusCode)
+        || option.shortCode.toUpperCase() === row.subjectCode.toUpperCase();
+      return match ? [{ teacherName: normalName(row.teacher.name), electivePick: subject.kind === "elective" ? option.shortCode : undefined }] : [];
+    }));
+    if (!matches.length) continue;
+    const [first] = matches;
+    return matches.every((match) => match.teacherName === first.teacherName && match.electivePick === first.electivePick) ? first : undefined;
+  }
+}
 
 function kindChip(kind: string) {
   const styles: Record<string, string> = {
@@ -127,6 +157,7 @@ export default function UnifiedSetup() {
   const navigate = useNavigate();
 
   const { data: registry } = useQuery({ queryKey: ["registry"], queryFn: fetchRegistry });
+  const { data: departmentList } = useQuery({ queryKey: ["departments"], queryFn: fetchDepartments });
   const [deptChoice, setDeptChoice] = useState<string>("");
   const registryEntry = registry?.find((d) => d.id === deptChoice);
   const hasCatalogue = !!registryEntry?.hasCatalogue;
@@ -142,9 +173,18 @@ export default function UnifiedSetup() {
     queryFn: () => fetchFaculty(deptChoice),
     enabled: !!registryEntry,
   });
+  const { data: previous, isFetched: previousLoaded } = useQuery({
+    queryKey: ["previous-assignments", deptChoice],
+    queryFn: () => fetchPreviousAssignments(deptChoice),
+    enabled: hasCatalogue,
+    retry: false,
+  });
 
   // Step A state
   const [deptName, setDeptName] = useState("");
+  const [variationName, setVariationName] = useState("");
+  const existingDepartment = departmentList?.departments.find((item) => !item.parentDepartmentId
+    && item.name.trim().toLowerCase() === (deptName || registryEntry?.name || "").trim().toLowerCase());
   const [deptShort, setDeptShort] = useState("");
   const [session, setSession] = useState("ODD 2026");
   const [effectiveFrom, setEffectiveFrom] = useState("27/07/2026");
@@ -174,6 +214,7 @@ export default function UnifiedSetup() {
   // department's faculty preloads (manual teachers stay).
   useEffect(() => {
     setStep(0);
+    setVariationName("");
     setAssignments({});
     setCustomByClass({});
     setSections({});
@@ -185,7 +226,7 @@ export default function UnifiedSetup() {
       setDeptName("");
       setDeptShort("");
     }
-    setTeachers((prev) => prev.filter((t) => !t.facultyCode));
+    setTeachers((prev) => prev.filter((t) => !t.facultyCode && !t.fromRoutine));
     seededFor.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deptChoice]);
@@ -193,20 +234,30 @@ export default function UnifiedSetup() {
   // Faculty list arrived: seed the pool (once per department).
   const seededFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!facultyData || seededFor.current === deptChoice) return;
+    if (!facultyData || (hasCatalogue && !previousLoaded) || seededFor.current === deptChoice) return;
     seededFor.current = deptChoice;
-    setTeachers((prev) => [
-      ...prev.filter((t) => !t.facultyCode),
-      ...facultyData.faculty.map((m) => ({
-        name: m.name,
-        code: m.code,
-        designation: m.designation,
-        weeklyHours: 24,
-        facultyCode: m.code,
-        included: true,
-      })),
-    ]);
-  }, [facultyData, deptChoice]);
+    setTeachers((prev) => {
+      const roster: GTeacher[] = [
+        ...prev.filter((t) => !t.facultyCode && !t.fromRoutine),
+        ...facultyData.faculty.map((m) => ({
+          name: m.name,
+          code: m.code,
+          designation: m.designation,
+          weeklyHours: 24,
+          facultyCode: m.code,
+          included: true,
+        })),
+      ];
+      for (const { teacher } of previous?.rows ?? []) {
+        if (roster.some((existing) => normalName(existing.name) === normalName(teacher.name))) continue;
+        const base = teacher.code || teacher.name.split(/\s+/).map((part) => part[0]).join("").toUpperCase();
+        let code = base;
+        for (let suffix = 2; roster.some((existing) => existing.code.toUpperCase() === code.toUpperCase()); suffix++) code = `${base}${suffix}`;
+        roster.push({ ...teacher, code, included: true, fromRoutine: true });
+      }
+      return roster;
+    });
+  }, [facultyData, deptChoice, previous, previousLoaded, hasCatalogue]);
 
   // Catalogue arrived: tick every programme by default.
   useEffect(() => {
@@ -278,7 +329,7 @@ export default function UnifiedSetup() {
             });
           }
         } else {
-          const count = sections[`${key}|${year}`] ?? (prog.programme === "B.Tech" ? 2 : 1);
+          const count = sections[`${key}|${year}`] ?? (prog.programme === "B.Tech" || (deptChoice === "CSE" && prog.programme === "MCA") ? 2 : 1);
           for (let i = 0; i < count; i++) {
             let section: string;
             if (prog.programme === "M.Tech") {
@@ -309,18 +360,76 @@ export default function UnifiedSetup() {
       }
     }
     return { queue: q, skipped: sk };
-  }, [catalogue, selected, parity, sections, customByClass, manualClasses, isManualMode]);
+  }, [catalogue, selected, parity, sections, customByClass, manualClasses, isManualMode, deptChoice]);
 
   // ---------------------------------------------------------------- helpers
   const includedTeachers = teachers.filter((t) => t.included);
+  const { suggestions, loads } = useMemo(() => {
+    const defaults: Record<string, Record<string, GAssignment>> = {};
+    const loads = new Map<string, number>();
+    const pending: { classKey: string; subjectKey: string; hours: number }[] = [];
+    const pool = teachers.filter((t) => t.included);
+    const codes = new Map(pool.map((t) => [normalName(t.name), t.code]));
+    const recordLoad = (teacherCode: string, hours: number) => {
+      if (teacherCode && teacherCode !== "XX") loads.set(teacherCode, (loads.get(teacherCode) ?? 0) + hours);
+    };
+    for (const entry of queue) for (const cls of entry.classes) {
+      defaults[cls.classKey] = {};
+      const saved = assignments[cls.classKey] ?? {};
+      const reserved = new Set(cls.subjects.filter((s) => s.timetabled).flatMap((s) => {
+        const code = s.kind === "elective" ? saved[s.key]?.electivePick ?? saved[s.key]?.customPick?.shortCode : s.shortCode;
+        return code ? [code.toUpperCase()] : [];
+      }));
+      for (const subject of cls.subjects.filter((s) => s.timetabled)) {
+        const manual = saved[subject.key];
+        const hours = scheduledHours(subject.kind, manual?.numbers?.weeklyHours ?? subject.weeklyHours ?? 0,
+          manual?.numbers?.sessionHours ?? subject.sessionHours);
+        if (manual) {
+          recordLoad(manual.teacherCode, hours);
+          continue;
+        }
+        const match = previous && suggestedAssignment(previous.rows, entry.programme, entry.semester, cls.section, subject);
+        const teacherCode = match && codes.get(match.teacherName);
+        if (match && teacherCode && !(match.electivePick && reserved.has(match.electivePick.toUpperCase()))) {
+          defaults[cls.classKey][subject.key] = { teacherCode, electivePick: match.electivePick };
+          recordLoad(teacherCode, hours);
+          if (match.electivePick) reserved.add(match.electivePick.toUpperCase());
+        } else {
+          pending.push({ classKey: cls.classKey, subjectKey: subject.key, hours });
+        }
+      }
+      for (const subject of cls.customs) {
+        const manual = saved[subject.shortCode];
+        const hours = scheduledHours(subject.kind, subject.weeklyHours, subject.sessionHours);
+        if (manual) recordLoad(manual.teacherCode, hours);
+        else pending.push({ classKey: cls.classKey, subjectKey: subject.shortCode, hours });
+      }
+    }
+    // Reserve existing assignments first, then fit longer unassigned subjects first.
+    for (const { classKey, subjectKey, hours } of pending.sort((a, b) => b.hours - a.hours)) {
+      let teacher: GTeacher | undefined;
+      let smallestLoad = Infinity;
+      for (const candidate of pool) {
+        const load = loads.get(candidate.code) ?? 0;
+        if (candidate.weeklyHours - load >= Math.max(1, hours) && load < smallestLoad) {
+          teacher = candidate;
+          smallestLoad = load;
+        }
+      }
+      if (!teacher) continue;
+      defaults[classKey][subjectKey] = { teacherCode: teacher.code, fromPool: true };
+      recordLoad(teacher.code, hours);
+    }
+    return { suggestions: defaults, loads };
+  }, [assignments, previous, queue, teachers]);
   const getAssignment = (classKey: string, subjectKey: string): GAssignment =>
-    assignments[classKey]?.[subjectKey] ?? { teacherCode: "" };
+    assignments[classKey]?.[subjectKey] ?? suggestions[classKey]?.[subjectKey] ?? { teacherCode: "" };
   const setAssignment = (classKey: string, subjectKey: string, patch: Partial<GAssignment>) =>
     setAssignments((prev) => ({
       ...prev,
       [classKey]: {
         ...(prev[classKey] ?? {}),
-        [subjectKey]: { ...(prev[classKey]?.[subjectKey] ?? { teacherCode: "" }), ...patch },
+        [subjectKey]: { ...getAssignment(classKey, subjectKey), ...patch },
       },
     }));
 
@@ -348,11 +457,6 @@ export default function UnifiedSetup() {
     if (s.weeklyHours === null && !numbersComplete(a)) return false;
     return true;
   };
-  const subjectHours = (classKey: string, s: CatalogueSubject): number => {
-    const a = getAssignment(classKey, s.key);
-    return a.numbers?.weeklyHours ?? s.weeklyHours ?? 0;
-  };
-
   const entryProgress = (entry: QueueEntry) => {
     let total = 0;
     let done = 0;
@@ -372,29 +476,6 @@ export default function UnifiedSetup() {
     }
     return { total, done, complete: !hasEmptyClass && total > 0 && done === total, hasEmptyClass };
   };
-
-  const loads = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const entry of queue) {
-      for (const cls of entry.classes) {
-        for (const s of cls.subjects) {
-          if (!s.timetabled) continue;
-          const a = assignments[cls.classKey]?.[s.key];
-          if (a && a.teacherCode && a.teacherCode !== "XX") {
-            map.set(a.teacherCode, (map.get(a.teacherCode) ?? 0) + subjectHours(cls.classKey, s));
-          }
-        }
-        for (const c of cls.customs) {
-          const a = assignments[cls.classKey]?.[c.shortCode];
-          if (a && a.teacherCode && a.teacherCode !== "XX") {
-            map.set(a.teacherCode, (map.get(a.teacherCode) ?? 0) + c.weeklyHours);
-          }
-        }
-      }
-    }
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queue, assignments]);
 
   const overMax = includedTeachers.filter((t) => (loads.get(t.code) ?? 0) > t.weeklyHours);
   const allComplete = queue.length > 0 && queue.every((e) => entryProgress(e).complete);
@@ -478,6 +559,7 @@ export default function UnifiedSetup() {
   const create = useMutation({
     mutationFn: () => {
       const payload: GuidedSetupPayload = {
+        ...((existingDepartment || conflictId) && variationName.trim() ? { variationName: variationName.trim() } : {}),
         ...(hasCatalogue ? { catalogueId: deptChoice } : {}),
         ...(registryEntry && teachers.some((t) => t.included && t.facultyCode)
           ? { facultyDeptId: deptChoice }
@@ -552,12 +634,12 @@ export default function UnifiedSetup() {
         setConflictId(resp.data.departmentId);
         setFeedback({
           kind: "warning",
-          text: "A department with this name already exists. Switch to it instead — setup never overwrites an existing department.",
+          text: "Enter a variation name to save this setup under the existing department.",
         });
         return;
       }
       if (resp?.data?.problems?.length) {
-        setFeedback({ kind: "error", text: resp.data.problems.join(" ") });
+        setFeedback({ kind: "error", text: resp.data.problems.join("\n") });
         return;
       }
       setFeedback({ kind: "error", text: errorMessage(e) });
@@ -699,7 +781,7 @@ export default function UnifiedSetup() {
                                     min={1}
                                     max={6}
                                     className="input w-16"
-                                    value={sections[skey] ?? (p.programme === "B.Tech" ? 2 : 1)}
+                                    value={sections[skey] ?? (p.programme === "B.Tech" || (deptChoice === "CSE" && p.programme === "MCA") ? 2 : 1)}
                                     onChange={(e) =>
                                       setSections((prev) => ({
                                         ...prev,
@@ -890,6 +972,9 @@ export default function UnifiedSetup() {
 
   const renderEntry = (entry: QueueEntry) => {
     const progress = entryProgress(entry);
+    const suggested = entry.classes.flatMap((cls) => Object.values(suggestions[cls.classKey] ?? {}));
+    const fromPool = suggested.filter((assignment) => assignment.fromPool).length;
+    const fromHistory = suggested.length - fromPool;
     return (
       <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
         <div>
@@ -906,6 +991,11 @@ export default function UnifiedSetup() {
                   ? " — complete, continue to the next semester."
                   : " — assign every subject (or mark XX) to continue."}
             </p>
+            {suggested.length > 0 && <p className="mt-1 text-sm text-muted">
+              {fromHistory > 0 && `${fromHistory} from ${previous?.source}. `}
+              {fromPool > 0 && `${fromPool} suggested from the teacher pool based on weekly workload. `}
+              You can change any selection.
+            </p>}
           </div>
           {entry.classes.map((cls) => (
             <ClassBlock
@@ -1010,6 +1100,13 @@ export default function UnifiedSetup() {
                 (Create unlocks at 100%).
               </p>
             )}
+            {(existingDepartment || conflictId) && (
+              <label className="mt-4 block max-w-md" htmlFor="routine-variation-name">
+                <span className="label">Routine variation name</span>
+                <input id="routine-variation-name" className="input" required maxLength={60} value={variationName}
+                  onChange={(event) => setVariationName(event.target.value)} />
+              </label>
+            )}
             {conflictId && (
               <div className="mt-3">
                 <button className="btn-ghost" onClick={() => switchDept.mutate(conflictId)}>
@@ -1019,10 +1116,10 @@ export default function UnifiedSetup() {
             )}
             <button
               className="btn-primary mt-4"
-              disabled={create.isPending || includedTeachers.length === 0 || overMax.length > 0 || !allComplete}
+              disabled={create.isPending || includedTeachers.length === 0 || overMax.length > 0 || !allComplete || Boolean((existingDepartment || conflictId) && !variationName.trim())}
               onClick={() => create.mutate()}
             >
-              <BookOpen className="h-4 w-4" aria-hidden /> Create department & classes
+              <BookOpen className="h-4 w-4" aria-hidden /> {existingDepartment || conflictId ? "Create routine variation" : "Create department & classes"}
             </button>
             {includedTeachers.length === 0 && (
               <p className="mt-2 text-sm text-muted">Include at least one teacher in the pool first.</p>
@@ -1196,7 +1293,7 @@ function ClassBlock({
                       />
                     </span>
                   ) : (
-                    `${s.weeklyHours}h`
+                    `${scheduledHours(s.kind, s.weeklyHours ?? 0, s.sessionHours)}h`
                   )}
                 </td>
                 <td className="td font-mono">
@@ -1228,7 +1325,11 @@ function ClassBlock({
                       >
                         <option value="">Choose elective…</option>
                         {pool.map((o) => (
-                          <option key={o.shortCode} value={o.shortCode}>
+                          <option key={o.shortCode} value={o.shortCode} disabled={o.shortCode !== a.electivePick && cls.subjects.some((other) => {
+                            if (!other.timetabled || other.key === s.key) return false;
+                            const code = other.kind === "elective" ? getAssignment(cls.classKey, other.key).electivePick : other.shortCode;
+                            return code?.toUpperCase() === o.shortCode.toUpperCase();
+                          })}>
                             {o.shortCode} — {o.title}
                           </option>
                         ))}
@@ -1290,7 +1391,7 @@ function ClassBlock({
                     remove
                   </button>
                 </td>
-                <td className="td font-mono">{c.weeklyHours}h</td>
+                <td className="td font-mono">{scheduledHours(c.kind, c.weeklyHours, c.sessionHours)}h</td>
                 <td className="td font-mono">{c.credits}</td>
                 <td className="td"><span className="text-slate-300">—</span></td>
                 <td className="td">

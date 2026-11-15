@@ -97,7 +97,7 @@ export default function MasterRoutine() {
 
   const entries = useMemo(() => data?.entries ?? [], [data]);
   const cellText = (e: RoutineEntry) =>
-    `${sheetSubjectLabel(e.subjectCode, e.subjectType)} - ${e.teacherCode || initialsCode(e.teacherName)}`;
+    `${sheetSubjectLabel(e.subjectCode, e.subjectType)} - ${e.teacherCode || initialsCode(e.teacherName)}${e.roomNumber ? ` · ${e.roomNumber}` : ""}`;
 
   /**
    * All sessions in the routine (one item per block, identified by its
@@ -370,6 +370,7 @@ export default function MasterRoutine() {
         </p>
         <p className="mt-1 font-mono text-sm text-muted">
           {config.session ?? "ODD 2026"}, w.e.f. {config.effectiveFrom ?? "27/07/2026"}
+          {config.variationName && ` · ${config.variationName}`}
         </p>
       </div>
 

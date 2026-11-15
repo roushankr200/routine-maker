@@ -5,12 +5,14 @@ services:
     plan: free
     # --include=dev: Render installs with NODE_ENV=production, which would
     # otherwise skip the devDependencies the client build (vite, tsc) needs.
-    buildCommand: npm install --include=dev && npm run build
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /
     envVars:
       - key: NODE_ENV
         value: production
+      - key: ADMIN_SIGNUP_CODE
+        generateValue: true
       # Set this manually in the Render dashboard to your MongoDB Atlas
       # connection string. Without it the server falls back to an
       # in-memory MongoDB (data resets on restart — demo only).

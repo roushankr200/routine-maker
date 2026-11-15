@@ -109,7 +109,7 @@ export async function loadDemoData(): Promise<{
   }
 
   const classIds: string[] = [];
-  for (const [program, year, section, semesterNumber] of DEMO_CLASSES) {
+  for (const [program, year, section, semesterNumber, studentCount] of DEMO_CLASSES) {
     const doc = await ClassSection.create({
       ...filter,
       program,
@@ -117,6 +117,7 @@ export async function loadDemoData(): Promise<{
       section,
       programme: program,
       semesterNumber,
+      studentCount,
     });
     classIds.push(doc._id.toString());
   }

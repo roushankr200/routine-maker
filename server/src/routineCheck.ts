@@ -5,6 +5,8 @@ export interface EntryLike {
   classId: string;
   subjectId: string;
   teacherId: string;
+  roomId?: string;
+  sessionId?: number;
   day: string;
   period: number;
 }
@@ -36,6 +38,8 @@ export function sessionBlock(entries: EntryLike[], entryId: string): EntryLike[]
     e.classId === start.classId &&
     e.subjectId === start.subjectId &&
     e.teacherId === start.teacherId &&
+    e.roomId === start.roomId &&
+    e.sessionId === start.sessionId &&
     e.day === start.day;
   const byPeriod = new Map<number, EntryLike>();
   for (const e of entries) if (same(e)) byPeriod.set(e.period, e);

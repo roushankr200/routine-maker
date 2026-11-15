@@ -30,9 +30,8 @@ export interface SubjectData {
    * Length (in hourly grid slots) of ONE session of this subject, as on
    * the real NITA sheet: theory sessions run 1–2 consecutive hours
    * (default 2), lab sessions 2–3 consecutive hours (default 3).
-   * A class-subject's weekly hours are split into sessions of this
-   * length, plus one shorter remainder session when hours do not
-   * divide evenly (e.g. theory 3h @ 2h/session -> 2h + 1h).
+   * Theory hours can span multiple sessions. A lab has one weekly
+   * session, capped at this length.
    */
   sessionHours: number;
 }
@@ -46,21 +45,44 @@ export function defaultSessionHours(type: "theory" | "lab"): number {
  * Normalise a stored sessionHours value: fall back to the type default
  * when missing/out of range (theory 1–2, lab 2–3).
  */
-export function sessionHoursOf(subject: SubjectData): number {
+export function sessionHoursOf(subject: { type: SubjectData["type"]; sessionHours?: number }): number {
   const fallback = defaultSessionHours(subject.type);
   const v = subject.sessionHours;
-  if (!Number.isInteger(v)) return fallback;
+  if (typeof v !== "number" || !Number.isInteger(v)) return fallback;
   if (subject.type === "theory") return v >= 1 && v <= 2 ? v : fallback;
   return v >= 2 && v <= 3 ? v : fallback;
+}
+
+export function scheduledWeeklyHours(hours: number, subject?: Parameters<typeof sessionHoursOf>[0]): number {
+  return subject?.type === "lab" ? Math.min(hours, sessionHoursOf(subject)) : hours;
 }
 
 export interface ClassSubjectData {
   classId: string;
   subjectId: string;
+  teacherId?: string;
   hours: number;
 }
 
+export interface RoomData {
+  id: string;
+  number: string;
+  type: "theory" | "lab";
+  capacity: number;
+}
+
+export interface RoomConstraints {
+  rooms: RoomData[];
+  classSizes: Map<string, number>;
+  reserved: Set<string>;
+}
+
+export function roomSlot(roomId: string, day: string, period: number): string {
+  return `${roomId}|${day}|${period}`;
+}
+
 export interface ScheduleConfig {
+  variationName?: string;
   days: string[];
   periodsPerDay: number;
   /** Lunch sits after this period number, or null for no lunch break. */
@@ -100,6 +122,7 @@ export interface Placement {
   day: string;
   period: number; // first period of the block
   teacherId: string;
+  roomId?: string;
 }
 
 export interface UnplacedJob {
@@ -114,6 +137,8 @@ export interface RoutineEntryData {
   classId: string;
   subjectId: string;
   teacherId: string;
+  roomId?: string;
+  sessionId?: number;
   day: string;
   period: number;
 }

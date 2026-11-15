@@ -12,9 +12,8 @@
  * theory sessions run 1–2 consecutive hours (2h is the common pattern),
  * lab sessions 2–3 consecutive hours (3h blocks sit 9–12 or 2–5).
  * Each subject carries `sessionHours` (theory default 2, lab default 3);
- * a class-subject's weekly hours split into sessions of that length,
- * plus one shorter remainder session when they do not divide evenly
- * (theory 4h @2 -> 2+2; theory 3h @2 -> 2+1; lab 3h @3 -> one block).
+ * theory hours split into sessions of that length, with a shorter
+ * remainder when needed. Each lab has one weekly block, capped at its session length.
  * A session must sit entirely inside the morning segment (P1–P4) or
  * the afternoon segment (P5–P7): it NEVER crosses the lunch break.
  *
@@ -64,8 +63,8 @@
  *               (day, start, teacher) that passes all hard checks,
  *               sort by soft score, try them in that order. Jobs that
  *               are IDENTICAL (same class, subject, duration and
- *               eligible teachers — e.g. the two 3h sessions of a 6h
- *               lab) are interchangeable, so they are placed in
+ *               eligible teachers, such as two 2h lectures for the same
+ *               class and subject) are interchangeable, so they are placed in
  *               non-decreasing (day, start) order: without that
  *               symmetry break the search wastes factorial effort
  *               re-trying permutations of the same sessions whenever
@@ -84,10 +83,14 @@ import {
   ClassSubjectData,
   Job,
   Placement,
+  RoomConstraints,
+  RoomData,
   ScheduleConfig,
   SolveResult,
   SubjectData,
   TeacherData,
+  roomSlot,
+  scheduledWeeklyHours,
   sessionHoursOf,
   unavailableKey,
 } from "./types.js";
@@ -124,11 +127,10 @@ export function expandJobs(
     const subject = subjects.get(cs.subjectId);
     if (!subject) continue;
     const eligible = [...teachers.values()]
-      .filter((t) => t.subjects.has(cs.subjectId))
+      .filter((t) => t.subjects.has(cs.subjectId) && (!cs.teacherId || t.id === cs.teacherId))
       .map((t) => t.id);
-    // Session splitting: weekly hours -> blocks of the subject's
-    // session length (+ one shorter remainder session, if any).
-    for (const duration of splitSessions(cs.hours, sessionHoursOf(subject))) {
+    // Cap labs at one block before splitting the weekly hours.
+    for (const duration of splitSessions(scheduledWeeklyHours(cs.hours, subject), sessionHoursOf(subject))) {
       raw.push({ classId: cs.classId, subjectId: cs.subjectId, duration, eligibleTeachers: eligible });
     }
   }
@@ -140,7 +142,7 @@ export function expandJobs(
   //   3. subject with the most total hours first
   const hoursBySubject = new Map<string, number>();
   for (const cs of classSubjects) {
-    hoursBySubject.set(cs.subjectId, (hoursBySubject.get(cs.subjectId) ?? 0) + cs.hours);
+    hoursBySubject.set(cs.subjectId, (hoursBySubject.get(cs.subjectId) ?? 0) + scheduledWeeklyHours(cs.hours, subjects.get(cs.subjectId)));
   }
   raw.sort((a, b) => {
     if (b.duration !== a.duration) return b.duration - a.duration;
@@ -164,6 +166,7 @@ interface Candidate {
   day: string;
   start: number;
   teacherId: string;
+  roomId?: string;
   teacherOrder: number; // index into job.eligibleTeachers (deterministic ties)
 }
 
@@ -177,6 +180,9 @@ export class Solver {
   private timeLimitMs: number;
   private maxNodes: number;
   private jobs: Job[];
+  private classDemand = new Map<string, number[]>();
+  private roomChoices = new Map<number, RoomData[]>();
+  private roomBusy: Set<string>;
 
   // Mutable search state (all undone on backtrack):
   private classBusy = new Set<string>(); // "class|day|period"        -> H2
@@ -198,6 +204,7 @@ export class Solver {
     config: ScheduleConfig,
     timeLimitSeconds = 10,
     maxNodes = 300_000,
+    roomConstraints?: RoomConstraints,
   ) {
     this.teachers = teachers;
     this.subjects = subjects;
@@ -208,6 +215,22 @@ export class Solver {
     this.timeLimitMs = timeLimitSeconds * 1000;
     this.maxNodes = maxNodes;
     this.jobs = expandJobs(teachers, subjects, classSubjects);
+    for (const job of this.jobs) this.changeClassDemand(job, 1);
+    this.roomBusy = new Set(roomConstraints?.reserved);
+    if (roomConstraints) {
+      // Labs have fewer compatible rooms and less flexibility around the break.
+      // Place their complete workload before filling the lecture timetable.
+      const isLab = (job: Job) => subjects.get(job.subjectId)?.type === "lab" ? 1 : 0;
+      const hoursByClass = new Map<string, number>();
+      for (const job of this.jobs) hoursByClass.set(job.classId, (hoursByClass.get(job.classId) ?? 0) + job.duration);
+      this.jobs.sort((a, b) => isLab(b) - isLab(a) || b.duration - a.duration
+        || hoursByClass.get(b.classId)! - hoursByClass.get(a.classId)!);
+      for (const job of this.jobs) {
+        const size = roomConstraints.classSizes.get(job.classId) ?? Infinity;
+        const type = subjects.get(job.subjectId)?.type;
+        this.roomChoices.set(job.jobIndex, roomConstraints.rooms.filter((room) => room.type === type && room.capacity >= size));
+      }
+    }
   }
 
   // -- hard-rule check ------------------------------------------------------
@@ -288,11 +311,32 @@ export class Solver {
 
   candidates(job: Job): Candidate[] {
     const out: Candidate[] = [];
+    const rooms = this.roomChoices.get(job.jobIndex);
     for (const day of this.days) {
+      const roomPatterns = new Set<string>();
+      const availableRooms = rooms?.filter((room) => {
+        const occupied = Array.from({ length: this.periods }, (_, i) => Number(this.roomBusy.has(roomSlot(room.id, day, i + 1)))).join("");
+        const pattern = `${room.capacity}|${occupied}`;
+        if (roomPatterns.has(pattern)) return false;
+        roomPatterns.add(pattern);
+        return true;
+      });
       for (let start = 1; start <= this.periods - job.duration + 1; start++) {
+        if (rooms && !this.classStillFits(job, day, start)) continue;
         job.eligibleTeachers.forEach((tid, teacherOrder) => {
-          if (this.canPlace(job, day, start, tid) === null) {
-            out.push({ score: this.softScore(job, day, start, tid), day, start, teacherId: tid, teacherOrder });
+          if (this.canPlace(job, day, start, tid) !== null) return;
+          const candidate = { score: this.softScore(job, day, start, tid), day, start, teacherId: tid, teacherOrder };
+          if (!availableRooms) {
+            out.push(candidate);
+            return;
+          }
+          for (const room of availableRooms) {
+            if (Array.from({ length: job.duration }, (_, offset) => roomSlot(room.id, day, start + offset))
+              .every((slot) => !this.roomBusy.has(slot))) {
+              // Pack labs into their time segment so a long block leaves room for shorter labs.
+              const roomPenalty = room.type === "lab" ? this.labFragmentation(room.id, day, start, job.duration) : 0;
+              out.push({ ...candidate, score: candidate.score + 40 * roomPenalty, roomId: room.id });
+            }
           }
         });
       }
@@ -307,11 +351,61 @@ export class Solver {
     return out;
   }
 
+  private changeClassDemand(job: Job, delta: number): void {
+    const demand = this.classDemand.get(job.classId) ?? [0, 0, 0, 0];
+    demand[job.duration] += delta;
+    this.classDemand.set(job.classId, demand);
+  }
+
+  private classStillFits(job: Job, day: string, start: number): boolean {
+    if (this.maxSegmentLength() > 4) return true;
+    const demand = this.classDemand.get(job.classId)!;
+    const twoHourSessions = demand[2] - Number(job.duration === 2);
+    const threeHourSessions = demand[3] - Number(job.duration === 3);
+    if (!twoHourSessions && !threeHourSessions) return true;
+
+    let twoHourSlots = 0;
+    let threeHourSlots = 0;
+    let exactThreeHourSlots = 0;
+    for (const weekday of this.days) {
+      let free = 0;
+      for (let period = 1; period <= this.periods + 1; period++) {
+        const occupied = this.classBusy.has(`${job.classId}|${weekday}|${period}`)
+          || (weekday === day && period >= start && period < start + job.duration);
+        if (!occupied && period <= this.periods) free++;
+        if (occupied || period === this.lunchAfter || period > this.periods) {
+          twoHourSlots += Math.floor(free / 2);
+          if (free >= 3) threeHourSlots++;
+          if (free === 3) exactThreeHourSlots++;
+          free = 0;
+        }
+      }
+    }
+    // In a four-hour segment, a three-hour block uses two possible pairs.
+    const pairsUsedByLongBlocks = threeHourSessions + Math.max(0, threeHourSessions - exactThreeHourSlots);
+    return threeHourSessions <= threeHourSlots && twoHourSessions + pairsUsedByLongBlocks <= twoHourSlots;
+  }
+
+  private labFragmentation(roomId: string, day: string, start: number, duration: number): number {
+    const afternoon = this.lunchAfter !== null && start > this.lunchAfter;
+    const first = afternoon ? this.lunchAfter! + 1 : 1;
+    const last = afternoon ? this.periods : this.lunchAfter ?? this.periods;
+    let left = start;
+    let right = start + duration - 1;
+    while (left > first && !this.roomBusy.has(roomSlot(roomId, day, left - 1))) left--;
+    while (right < last && !this.roomBusy.has(roomSlot(roomId, day, right + 1))) right++;
+    return Math.floor((right - left + 1) / 2)
+      - Math.floor((start - left) / 2)
+      - Math.floor((right - start - duration + 1) / 2);
+  }
+
   // -- state mutation ---------------------------------------------------------
-  private apply(job: Job, day: string, start: number, teacherId: string): void {
+  private apply(job: Job, { day, start, teacherId, roomId }: Candidate): void {
+    this.changeClassDemand(job, -1);
     for (let p = start; p < start + job.duration; p++) {
       this.classBusy.add(`${job.classId}|${day}|${p}`);
       this.teacherBusy.add(`${teacherId}|${day}|${p}`);
+      if (roomId) this.roomBusy.add(roomSlot(roomId, day, p));
       const key = `${job.classId}|${day}`;
       if (!this.classDayPeriods.has(key)) this.classDayPeriods.set(key, new Set());
       this.classDayPeriods.get(key)!.add(p);
@@ -321,13 +415,15 @@ export class Solver {
     this.teacherWeek.set(teacherId, (this.teacherWeek.get(teacherId) ?? 0) + job.duration);
     const csKey = `${job.classId}|${job.subjectId}|${day}`;
     this.classSubjectDay.set(csKey, (this.classSubjectDay.get(csKey) ?? 0) + 1);
-    this.placed.push({ job, day, period: start, teacherId });
+    this.placed.push({ job, day, period: start, teacherId, roomId });
   }
 
-  private undo(job: Job, day: string, start: number, teacherId: string): void {
+  private undo(job: Job, { day, start, teacherId, roomId }: Candidate): void {
+    this.changeClassDemand(job, 1);
     for (let p = start; p < start + job.duration; p++) {
       this.classBusy.delete(`${job.classId}|${day}|${p}`);
       this.teacherBusy.delete(`${teacherId}|${day}|${p}`);
+      if (roomId) this.roomBusy.delete(roomSlot(roomId, day, p));
       this.classDayPeriods.get(`${job.classId}|${day}`)?.delete(p);
     }
     const dayKey = `${teacherId}|${day}`;
@@ -365,9 +461,9 @@ export class Solver {
 
     for (const c of this.candidates(job)) {
       if (twinPos >= 0 && (this.dayIndex.get(c.day) ?? 0) * 100 + c.start < twinPos) continue;
-      this.apply(job, c.day, c.start, c.teacherId);
+      this.apply(job, c);
       if (this.search(idx + 1)) return true;
-      this.undo(job, c.day, c.start, c.teacherId);
+      this.undo(job, c);
       if (Date.now() > this.deadline || this.nodes > this.maxNodes) return false;
     }
     return false;
@@ -380,6 +476,9 @@ export class Solver {
   }
 
   private reasonFor(job: Job): string {
+    if (this.roomChoices.get(job.jobIndex)?.length === 0) {
+      return "no room of the required type has enough seats for this class";
+    }
     if (job.eligibleTeachers.length === 0) {
       return "no teacher is eligible for this subject (H6)";
     }
@@ -395,7 +494,7 @@ export class Solver {
     );
     return (
       "no free slot satisfies all hard rules — class/teacher busy, " +
-      `daily/weekly caps or unavailability (eligible teachers' combined weekly cap is ${caps})`
+      `daily/weekly caps, unavailability or room reservations (eligible teachers' combined weekly cap is ${caps})`
     );
   }
 
@@ -422,6 +521,8 @@ export class Solver {
         classId: p.job.classId,
         subjectId: p.job.subjectId,
         teacherId: p.teacherId,
+        roomId: p.roomId,
+        sessionId: p.job.jobIndex,
         day: p.day,
         period: p.period + offset,
       })),
@@ -446,6 +547,7 @@ export function solve(
   classSubjects: ClassSubjectData[],
   config: ScheduleConfig,
   timeLimitSeconds = 10,
+  rooms?: RoomConstraints,
 ): SolveResult {
-  return new Solver(teachers, subjects, classSubjects, config, timeLimitSeconds).solve();
+  return new Solver(teachers, subjects, classSubjects, config, timeLimitSeconds, undefined, rooms).solve();
 }

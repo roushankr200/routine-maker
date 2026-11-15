@@ -5,6 +5,7 @@ import { BookOpen, Database, Play, Trash2 } from "lucide-react";
 import {
   activateDepartment,
   clearRoutine,
+  copyRoutineVariation,
   deleteDepartment,
   errorMessage,
   fetchDashboard,
@@ -27,6 +28,7 @@ export default function Dashboard() {
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({ queryKey: ["dashboard"], queryFn: fetchDashboard });
   const [feedback, setFeedback] = useState<{ kind: "success" | "error" | "warning"; text: string } | null>(null);
+  const [variationName, setVariationName] = useState("");
 
   const refresh = () => qc.invalidateQueries();
   const seed = useMutation({
@@ -46,6 +48,16 @@ export default function Dashboard() {
     onError: (e) => setFeedback({ kind: "error", text: errorMessage(e) }),
   });
   const { data: deptData } = useQuery({ queryKey: ["departments"], queryFn: fetchDepartments });
+  const activeDepartment = deptData?.departments.find((department) => department.isActive);
+  const copy = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => copyRoutineVariation(id, name),
+    onSuccess: (r) => {
+      setFeedback({ kind: "success", text: r.message });
+      setVariationName("");
+      refresh();
+    },
+    onError: (e) => setFeedback({ kind: "error", text: errorMessage(e) }),
+  });
   const switchDept = useMutation({
     mutationFn: (id: string) => activateDepartment(id),
     onSuccess: () => window.location.reload(),
@@ -75,9 +87,11 @@ export default function Dashboard() {
   return (
     <div>
       <PageTitle title="Dashboard">
-        <button className="btn-ghost" onClick={() => seed.mutate()} disabled={seed.isPending}>
-          <Database className="h-4 w-4" aria-hidden /> Load NIT Agartala CSE Data
-        </button>
+        {deptData && !deptData.departments.some((department) => department.shortName === "CSE") && (
+          <button className="btn-ghost" onClick={() => seed.mutate()} disabled={seed.isPending}>
+            <Database className="h-4 w-4" aria-hidden /> Load NIT Agartala CSE Data
+          </button>
+        )}
         <Link className="btn-ghost" to="/setup">
           <BookOpen className="h-4 w-4" aria-hidden /> Set up a department
         </Link>
@@ -92,6 +106,16 @@ export default function Dashboard() {
       </PageTitle>
 
       {feedback && <Banner kind={feedback.kind} text={feedback.text} />}
+      {generate.data && !generate.data.success && generate.data.unplaced.length > 0 && (
+        <div className="card my-4 p-4">
+          <h2 className="mb-2 font-semibold">Unplaced sessions</h2>
+          <ul className="max-h-64 space-y-2 overflow-auto text-sm text-muted">
+            {generate.data.unplaced.map((session, index) => (
+              <li key={index}><strong>{session.className} · {session.subjectName}</strong> ({session.duration}h) · {session.reason}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard label="Teachers" value={data.stats.teachers} />
@@ -110,25 +134,23 @@ export default function Dashboard() {
           </ul>
         </div>
       )}
-      {data.warnings.length > 0 && (
-        <div className="card mt-5 px-5 py-4">
-          <h2 className="mb-2 font-semibold">Notes</h2>
-          <ul className="list-inside list-disc text-sm text-muted">
-            {data.warnings.map((w) => (
-              <li key={w}>{w}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       {deptData && (
         <div className="card mt-5 px-5 py-4">
-          <h2 className="mb-2 font-semibold">Departments</h2>
+          <h2 className="mb-2 font-semibold">Departments and routine variations</h2>
           <p className="mb-3 text-sm text-muted">
-            Departments are saved side by side. Switching departments never deletes
-            anything — a department and its data are removed only when you press its
-            Delete button here.
+            Switch between the main timetable and named variations. Teacher and student accounts see the main timetable.
           </p>
+          {activeDepartment && <form className="mb-4 flex flex-wrap items-end gap-2" onSubmit={(event) => {
+            event.preventDefault();
+            if (variationName.trim()) copy.mutate({ id: activeDepartment.id, name: variationName.trim() });
+          }}>
+            <label className="w-full max-w-xs" htmlFor="copy-variation-name">
+              <span className="label">New variation name</span>
+              <input className="input" id="copy-variation-name" required maxLength={60} value={variationName}
+                onChange={(event) => setVariationName(event.target.value)} />
+            </label>
+            <button className="btn-primary" disabled={copy.isPending || !variationName.trim()}>Copy as variation</button>
+          </form>}
           {deptData.departments.length === 0 ? (
             <p className="text-sm text-muted">
               No departments yet — load the built-in CSE department or set one up.
@@ -142,6 +164,7 @@ export default function Dashboard() {
                 >
                   <div className="text-sm">
                     <span className="font-mono font-semibold">{d.shortName}</span> — {d.name}{" "}
+                    <span className="font-medium">· {d.variationName ?? "Main routine"} </span>
                     <span className="text-muted">
                       · {d.counts.teachers} teachers · {d.counts.subjects} subjects ·{" "}
                       {d.counts.classes} classes
@@ -164,16 +187,14 @@ export default function Dashboard() {
                     )}
                     <button
                       className="btn-danger"
-                      disabled={deptData.departments.length <= 1 || removeDept.isPending}
-                      title={
-                        deptData.departments.length <= 1
-                          ? "The last remaining department cannot be deleted"
-                          : undefined
-                      }
+                      disabled={removeDept.isPending || (!d.parentDepartmentId && (
+                        deptData.departments.filter((item) => !item.parentDepartmentId).length <= 1
+                        || deptData.departments.some((item) => item.parentDepartmentId === d.id)
+                      ))}
                       onClick={() => {
                         if (
                           window.confirm(
-                            `Delete the ${d.shortName} department and all its data? This cannot be undone. Other departments are not affected.`,
+                            d.variationName ? `Delete the variation “${d.variationName}” and its timetable?` : `Delete the ${d.shortName} department and its timetable?`,
                           )
                         ) {
                           removeDept.mutate(d.id);
@@ -194,11 +215,9 @@ export default function Dashboard() {
         <h2 className="mb-2 font-semibold">Two ways to use Routine Maker</h2>
         <p className="mb-2 text-sm">
           <strong>Path A — the built-in department:</strong> NIT Agartala CSE comes preloaded.
-          Loading (or reloading) it only ever touches the CSE department — every other
-          department you have created keeps its data.
         </p>
         <ol className="list-inside list-decimal space-y-1 text-sm">
-          <li>Click Load NIT Agartala CSE Data (42 faculty, 69 subjects incl. 20 labs, 14 classes — B.Tech Sem 1 Group I + II / Sem 3 / 5 / 7 A+B, MCA Sem 1 / 3 / 5, M.Tech CYSEC / DSE / AI — subjects, hours and credits derived from the official syllabus catalogue, faculty from the real sheet, Mon–Fri).</li>
+          <li>Review the preloaded CSE sections in <Link className="font-medium text-primary-dark underline" to="/classes">Classes</Link>. B.Tech has 60 per section, MCA has 30 per section, and M.Tech has 15 per specialisation.</li>
           <li>Open Validation — check demand vs teacher capacity per subject.</li>
           <li>Click Generate Routine.</li>
           <li>View the Master sheet (NITA format: time-headed columns, LUNCH, faculty + subject legends) / per-class / per-teacher routines, export CSV, or print the master sheet.</li>

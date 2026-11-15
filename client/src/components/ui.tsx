@@ -21,7 +21,7 @@ export function Banner({
   return (
     <div role="status" className={`mb-4 flex items-start gap-2 rounded-md border px-4 py-3 text-sm ${styles}`}>
       <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-      <span>{text}</span>
+      <span className="whitespace-pre-line">{text}</span>
     </div>
   );
 }
@@ -71,7 +71,7 @@ export function sessionBlocks(entries: RoutineEntry[], day: string): Map<number,
       prev !== undefined &&
       prev.classId === e.classId &&
       prev.subjectId === e.subjectId &&
-      prev.teacherId === e.teacherId;
+      prev.teacherId === e.teacherId && prev.roomNumber === e.roomNumber && prev.sessionId === e.sessionId;
     if (continuesPrev) continue;
     let length = 1;
     while (true) {
@@ -80,7 +80,7 @@ export function sessionBlocks(entries: RoutineEntry[], day: string): Map<number,
         nxt &&
         nxt.classId === e.classId &&
         nxt.subjectId === e.subjectId &&
-        nxt.teacherId === e.teacherId
+        nxt.teacherId === e.teacherId && nxt.roomNumber === e.roomNumber && nxt.sessionId === e.sessionId
       ) {
         length++;
       } else break;
@@ -145,6 +145,7 @@ export function RoutineGrid({
                           {block ? (
                             <div>
                               <SubjectChip code={block.entry.subjectCode} type={block.entry.subjectType} />
+                              {block.entry.roomNumber && <div className="mt-1 text-xs font-semibold">Room {block.entry.roomNumber}</div>}
                               <div className="mt-1 text-xs text-muted">
                                 {cellMode === "teacher" ? block.entry.className : block.entry.teacherName}
                               </div>

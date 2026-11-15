@@ -33,13 +33,21 @@ export const SCOPED_MODELS: any[] = [
 
 /** "Computer Science and Engineering" (case-insensitive) lookup. */
 export async function findDepartmentByName(name: string) {
-  const all = await Department.find().lean();
+  const all = await Department.find({ parentDepartmentId: null }).lean();
   const key = name.trim().toLowerCase();
   return all.find((d) => d.name.trim().toLowerCase() === key) ?? null;
 }
 
 export async function listDepartments() {
   return Department.find().sort({ createdAt: 1 });
+}
+
+export function variationKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+export async function findVariation(parentDepartmentId: Types.ObjectId, name: string) {
+  return Department.findOne({ parentDepartmentId, variationKey: variationKey(name) });
 }
 
 export async function getActiveDepartment() {
@@ -72,6 +80,10 @@ export async function setActiveDepartment(id: string | Types.ObjectId): Promise<
 /** The Mongo filter that scopes a query to one department. */
 export function scope(departmentId: string) {
   return { departmentId: new Types.ObjectId(departmentId) };
+}
+
+export function publishedRoutineScope(department: { _id: Types.ObjectId; publicationId?: Types.ObjectId }) {
+  return { departmentId: department._id, publicationId: department.publicationId ?? null };
 }
 
 /** Delete ONLY one department's scoped data (the department stays). */
