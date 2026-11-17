@@ -63,10 +63,10 @@ import {
 } from "./catalog/index.js";
 
 export const DEMO_CONFIG: ScheduleConfig = {
-  // NITA pattern from the real sheet: Mon–Fri, hourly grid from 9:00,
+  // 40 hours weekly grid: Mon–Fri, 8 periods per day, hourly grid from 9:00,
   // lunch 1:00–2:00 after P4. Sessions are blocks across hours.
   days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
-  periodsPerDay: 7,
+  periodsPerDay: 8,
   lunchAfter: 4,
   periodDuration: 60,
   startTime: "09:00",

@@ -37,6 +37,8 @@
  *     H8  A lab session is one unbroken block of its session length
  *         on the same day, never spanning the lunch break (the same
  *         no-lunch-crossing rule applies to every session).
+ *     H9  No two consecutive classes for the same faculty member on any day
+ *         within a teaching segment. Lunch counts as a break.
  *
  * Soft preferences (used only to *rank* candidates, never to reject one):
  *
@@ -89,9 +91,11 @@ import {
   SolveResult,
   SubjectData,
   TeacherData,
+  hasBackToBackSession,
   roomSlot,
   scheduledWeeklyHours,
   sessionHoursOf,
+  teacherWeeklyLimit,
   unavailableKey,
 } from "./types.js";
 
@@ -248,12 +252,17 @@ export class Solver {
       return "session would span the lunch break";
     }
     // H4: weekly cap (checked once, it covers every period equally)
-    if ((this.teacherWeek.get(teacherId) ?? 0) + job.duration > teacher.weeklyHours) {
+    if ((this.teacherWeek.get(teacherId) ?? 0) + job.duration > teacherWeeklyLimit(teacher)) {
       return `${teacher.name} would exceed weekly hours (H4)`;
     }
     // H3: daily cap
     if ((this.teacherDay.get(`${teacherId}|${day}`) ?? 0) + job.duration > teacher.maxPerDay) {
       return `${teacher.name} would exceed max/day (H3)`;
+    }
+    if (!teacher.isPlaceholder && hasBackToBackSession(start, end,
+      { periodsPerDay: this.periods, lunchAfter: this.lunchAfter },
+      (period) => this.teacherBusy.has(`${teacherId}|${day}|${period}`))) {
+      return `${teacher.name} cannot have consecutive classes on ${day} (H9)`;
     }
     for (let p = start; p <= end; p++) {
       if (this.classBusy.has(`${job.classId}|${day}|${p}`)) {
@@ -489,12 +498,12 @@ export class Solver {
       );
     }
     const caps = job.eligibleTeachers.reduce(
-      (sum, t) => sum + (this.teachers.get(t)?.weeklyHours ?? 0),
+      (sum, t) => sum + teacherWeeklyLimit(this.teachers.get(t)!),
       0,
     );
     return (
       "no free slot satisfies all hard rules — class/teacher busy, " +
-      `daily/weekly caps, unavailability or room reservations (eligible teachers' combined weekly cap is ${caps})`
+      `daily/weekly caps, required teaching gaps, unavailability or room reservations (eligible teachers' combined weekly cap is ${caps})`
     );
   }
 

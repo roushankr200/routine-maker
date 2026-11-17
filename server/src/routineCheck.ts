@@ -1,4 +1,4 @@
-import { SubjectData, TeacherData } from "./solver/types.js";
+import { hasBackToBackSession, SubjectData, TeacherData, teacherWeeklyLimit } from "./solver/types.js";
 
 export interface EntryLike {
   id: string;
@@ -22,6 +22,31 @@ export interface BlockInfo {
 export interface GridShape {
   periodsPerDay: number;
   lunchAfter: number | null;
+}
+
+export function savedFacultyWorkloadIssues(entries: EntryLike[], teachers: Map<string, TeacherData>, grid: GridShape): string[] {
+  const hours = new Map<string, number>();
+  const slots = new Map<string, EntryLike>();
+  const adjacent = new Set<string>();
+  for (const entry of entries) {
+    hours.set(entry.teacherId, (hours.get(entry.teacherId) ?? 0) + 1);
+    slots.set(`${entry.teacherId}|${entry.day}|${entry.period}`, entry);
+  }
+  for (const entry of entries) {
+    if (entry.period === grid.lunchAfter || entry.period >= grid.periodsPerDay) continue;
+    const next = slots.get(`${entry.teacherId}|${entry.day}|${entry.period + 1}`);
+    if (!next || teachers.get(entry.teacherId)?.isPlaceholder) continue;
+    const sameSession = entry.sessionId !== undefined || next.sessionId !== undefined
+      ? entry.sessionId === next.sessionId
+      : entry.classId === next.classId && entry.subjectId === next.subjectId && entry.roomId === next.roomId;
+    if (!sameSession) adjacent.add(entry.teacherId);
+  }
+  const overCap = [...teachers.values()].filter((teacher) => (hours.get(teacher.id) ?? 0) > teacherWeeklyLimit(teacher));
+  const issues: string[] = [];
+  if (overCap.length) issues.push(`The saved routine exceeds the weekly limit for ${overCap.length} teacher(s) (H4).`);
+  if (adjacent.size) issues.push(`The saved routine has back-to-back sessions for ${adjacent.size} teacher(s) (H9).`);
+  if (issues.length) issues.push("Generate the routine again to apply the current faculty rules.");
+  return issues;
 }
 
 /**
@@ -104,70 +129,32 @@ export function checkBlockPlacement(
   if (dayCount + len > teacher.maxPerDay) {
     return `${teacher.name} would exceed max/day ${teacher.maxPerDay}h (H3).`;
   }
-  // H4: weekly cap, counting the whole block's hours
+  // H4: weekly cap, counting the whole block's hours.
   const weekCount = others.filter((e) => e.teacherId === block.teacherId).length;
-  if (weekCount + len > teacher.weeklyHours) {
-    return `${teacher.name} would exceed weekly hours ${teacher.weeklyHours} (H4).`;
+  const weeklyLimit = teacherWeeklyLimit(teacher);
+  if (weekCount + len > weeklyLimit) {
+    return `${teacher.name} would exceed weekly hours ${weeklyLimit} (H4).`;
+  }
+  if (!teacher.isPlaceholder && hasBackToBackSession(start, end, grid,
+    (period) => others.some((e) => e.teacherId === block.teacherId && e.day === day && e.period === period))) {
+    return `${teacher.name} needs a break between teaching sessions on ${day} (H9).`;
   }
   return null;
 }
 
-/**
- * Validate one placement against H1–H7, given the full entry list with
- * `candidate` already in its (possibly new) position and every entry in
- * `excludeIds` ignored for clash counting except the candidate itself.
- * This is the in-memory equivalent of the original SQL check_entry():
- * manual moves/swaps are re-checked instantly and rejected with a reason.
- *
- * Returns a reason string, or null when the placement is legal.
- */
+/** Check the candidate's complete session against the other saved entries. */
 export function checkPlacement(
   entries: EntryLike[],
   candidate: EntryLike,
   teachers: Map<string, TeacherData>,
   subjects: Map<string, SubjectData>,
+  grid: GridShape = { periodsPerDay: 8, lunchAfter: 4 },
 ): string | null {
-  const teacher = teachers.get(candidate.teacherId);
-  if (!teacher) return "Teacher not found.";
-  const subject = subjects.get(candidate.subjectId);
-  if (!subject) return "Subject not found.";
-
-  // H6: eligibility
-  if (!teacher.subjects.has(candidate.subjectId)) {
-    return `${teacher.name} cannot teach ${subject.name} (H6).`;
-  }
-  // H7: availability
-  if (
-    teacher.unavailable.has(`${candidate.day}|${candidate.period}`) ||
-    teacher.unavailable.has(`${candidate.day}|*`)
-  ) {
-    return `${teacher.name} is unavailable at ${candidate.day} P${candidate.period} (H7).`;
-  }
-
-  const others = entries.filter((e) => e.id !== candidate.id);
-  // H1: teacher clash
-  const clashT = others.find(
-    (e) => e.teacherId === candidate.teacherId && e.day === candidate.day && e.period === candidate.period,
+  const proposed = [...entries.filter((e) => e.id !== candidate.id), candidate];
+  const block = candidate.sessionId === undefined ? [candidate] : sessionBlock(proposed, candidate.id);
+  const ids = new Set(block.map((e) => e.id));
+  return checkBlockPlacement(
+    proposed.filter((e) => !ids.has(e.id)), { ...candidate, length: block.length },
+    candidate.day, block[0].period, teachers, subjects, grid,
   );
-  if (clashT) {
-    return `${teacher.name} already teaches another class at ${candidate.day} P${candidate.period} (H1).`;
-  }
-  // H2: class clash
-  const clashC = others.find(
-    (e) => e.classId === candidate.classId && e.day === candidate.day && e.period === candidate.period,
-  );
-  if (clashC) {
-    return `Class already has a period at ${candidate.day} P${candidate.period} (H2).`;
-  }
-  // H3: daily cap (candidate counts as 1 of the day's periods)
-  const dayCount = others.filter((e) => e.teacherId === candidate.teacherId && e.day === candidate.day).length;
-  if (dayCount + 1 > teacher.maxPerDay) {
-    return `${teacher.name} would exceed max/day ${teacher.maxPerDay} (H3).`;
-  }
-  // H4: weekly cap
-  const weekCount = others.filter((e) => e.teacherId === candidate.teacherId).length;
-  if (weekCount + 1 > teacher.weeklyHours) {
-    return `${teacher.name} would exceed weekly hours ${teacher.weeklyHours} (H4).`;
-  }
-  return null;
 }

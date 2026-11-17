@@ -54,10 +54,10 @@ import {
 } from "./solver/balance.js";
 import { loadSolverData, validateData } from "./data.js";
 import { solve } from "./solver/solver.js";
-import { scheduledWeeklyHours } from "./solver/types.js";
+import { scheduledWeeklyHours, teacherWeeklyLimit } from "./solver/types.js";
 import { loadDemoData } from "./seed.js";
 import { classLabel, parseSemesterNumber } from "./demoData.js";
-import { checkBlockPlacement, EntryLike, sessionBlock } from "./routineCheck.js";
+import { checkBlockPlacement, EntryLike, savedFacultyWorkloadIssues, sessionBlock } from "./routineCheck.js";
 import { accountFor } from "./accounts.js";
 import { Room, otherRoomReservations, roomConstraints } from "./rooms.js";
 import { scheduleWrite } from "./scheduleWrite.js";
@@ -202,20 +202,22 @@ router.delete(
 router.get(
   "/dashboard",
   wrap(async (_req, res) => {
-    const filter = await readFilter();
-    const [teachers, subjects, classes, entries] = await Promise.all([
+    const department = await getActiveDepartment();
+    const departmentId = department?._id.toString();
+    const filter = departmentId ? scope(departmentId) : { departmentId: { $exists: false } };
+    const [teachers, subjects, classes, entries, data] = await Promise.all([
       Teacher.countDocuments({ ...filter, isPlaceholder: { $ne: true } }),
       Subject.countDocuments(filter),
       ClassSection.countDocuments(filter),
-      RoutineEntry.countDocuments(filter),
+      entriesAsLikes(department),
+      loadSolverData(departmentId),
     ]);
-    const data = await loadSolverData();
     const { issues, warnings } = validateData(data);
     res.json({
-      stats: { teachers, subjects, classes, entries },
-      issues,
+      stats: { teachers, subjects, classes, entries: entries.length },
+      issues: [...issues, ...savedFacultyWorkloadIssues(entries, data.teachers, data.config)],
       warnings,
-      hasRoutine: entries > 0,
+      hasRoutine: entries.length > 0,
       config: data.config,
     });
   }),
@@ -780,7 +782,7 @@ router.get(
       .sort({ name: 1 })
       .lean();
     res.json(
-      teachers.map((t) => ({ ...t, id: t._id.toString(), subjects: t.subjects.map(String) })),
+      teachers.map((t) => ({ ...t, id: t._id.toString(), weeklyHours: teacherWeeklyLimit(t), subjects: t.subjects.map(String) })),
     );
   }),
 );
@@ -1305,8 +1307,8 @@ router.post(
   }),
 );
 
-async function entriesAsLikes(): Promise<EntryLike[]> {
-  const department = await getActiveDepartment();
+async function entriesAsLikes(department?: Awaited<ReturnType<typeof getActiveDepartment>>): Promise<EntryLike[]> {
+  if (department === undefined) department = await getActiveDepartment();
   if (!department) return [];
   const docs = await RoutineEntry.find(publishedRoutineScope(department)).lean();
   return docs.map((e) => ({
@@ -1456,7 +1458,7 @@ async function balanceFromDb(): Promise<BalanceReport> {
     teachers: teacherDocs.map((t) => ({
       code: t.code ?? "",
       name: t.name,
-      weeklyMaxHours: t.weeklyHours,
+      weeklyMaxHours: teacherWeeklyLimit(t),
       eligibleSubjectCodes: t.subjects
         .map((sid) => codeBySubjectId.get(sid.toString()))
         .filter((c): c is string => Boolean(c)),

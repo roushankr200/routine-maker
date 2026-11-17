@@ -196,7 +196,7 @@ export default function UnifiedSetup() {
   const [teachers, setTeachers] = useState<GTeacher[]>([]);
   const [newName, setNewName] = useState("");
   const [newCode, setNewCode] = useState("");
-  const [newMax, setNewMax] = useState(24);
+  const [newMax, setNewMax] = useState(40);
   const [assignments, setAssignments] = useState<Record<string, Record<string, GAssignment>>>({});
   const [customByClass, setCustomByClass] = useState<Record<string, CustomSubjectPayload[]>>({});
   const [manualClasses, setManualClasses] = useState<ManualClass[]>([]);
@@ -243,7 +243,7 @@ export default function UnifiedSetup() {
           name: m.name,
           code: m.code,
           designation: m.designation,
-          weeklyHours: 24,
+          weeklyHours: 40,
           facultyCode: m.code,
           included: true,
         })),
@@ -943,7 +943,7 @@ export default function UnifiedSetup() {
         <div className="flex gap-2">
           <input className="input font-mono" placeholder="Code (DJB)" value={newCode}
             onChange={(e) => setNewCode(e.target.value)} />
-          <input className="input w-24" type="number" min={1} max={80} value={newMax}
+          <input className="input w-24" type="number" min={1} max={40} value={newMax}
             title="Weekly max hours"
             onChange={(e) => setNewMax(Number(e.target.value))} />
         </div>

@@ -10,6 +10,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { solve, splitSessions } from "../src/solver/solver.js";
 import { SolveResult, scheduledWeeklyHours, unavailableKey } from "../src/solver/types.js";
 import { buildDemoSolverData } from "../src/demoData.js";
+import { checkBlockPlacement, savedFacultyWorkloadIssues } from "../src/routineCheck.js";
 
 const { teachers, subjects, classSubjects, config } = buildDemoSolverData();
 let result: SolveResult;
@@ -74,6 +75,29 @@ describe("demo dataset solves clean", () => {
       expect(t.subjects.has(e.subjectId)).toBe(true);
       expect(t.unavailable.has(unavailableKey(e.day, e.period))).toBe(false);
       expect(t.unavailable.has(unavailableKey(e.day, null))).toBe(false);
+    }
+  });
+
+  it("H9: no teacher teaches two consecutive classes on any day", () => {
+    const byTeacherDay = new Map<string, Array<{ start: number; end: number }>>();
+    for (const p of result.placements) {
+      const key = `${p.teacherId}|${p.day}`;
+      if (!byTeacherDay.has(key)) byTeacherDay.set(key, []);
+      byTeacherDay.get(key)!.push({ start: p.period, end: p.period + p.job.duration - 1 });
+    }
+    for (const [key, sessions] of byTeacherDay.entries()) {
+      sessions.sort((a, b) => a.start - b.start);
+      for (let i = 0; i < sessions.length - 1; i++) {
+        const curr = sessions[i];
+        const next = sessions[i + 1];
+        const isLunchGap = config.lunchAfter !== null && curr.end === config.lunchAfter && next.start === config.lunchAfter + 1;
+        if (!isLunchGap) {
+          expect(
+            next.start,
+            `Teacher ${key} has consecutive classes: P${curr.start}-${curr.end} and P${next.start}-${next.end}`,
+          ).toBeGreaterThan(curr.end + 1);
+        }
+      }
     }
   });
 });
@@ -218,5 +242,31 @@ describe("impossible data reports unplaced jobs", () => {
     expect(r.success).toBe(false);
     expect(r.unplaced.length).toBeGreaterThan(0);
     expect(r.unplaced[0].reason.length).toBeGreaterThan(0);
+  });
+});
+
+describe("saved and manually edited teaching sessions", () => {
+  const teacher = { id: "T1", name: "Teacher", maxPerDay: 8, weeklyHours: 80,
+    subjects: new Set(["S1"]), unavailable: new Set<string>() };
+  const teachers = new Map([[teacher.id, teacher]]);
+  const subjects = new Map([["S1", { id: "S1", name: "Theory", code: "TH", type: "theory" as const, sessionHours: 2 }]]);
+  const grid = { periodsPerDay: 8, lunchAfter: 4 };
+  const block = { classId: "C1", subjectId: "S1", teacherId: "T1", length: 2 };
+
+  it("rejects adjacent blocks on either side and accepts the lunch break", () => {
+    const entry = { id: "E1", classId: "C2", subjectId: "S1", teacherId: "T1", day: "Monday", period: 4 };
+    expect(checkBlockPlacement([entry], block, "Monday", 2, teachers, subjects, grid)).toContain("H9");
+    expect(checkBlockPlacement([{ ...entry, period: 1 }], block, "Monday", 2, teachers, subjects, grid)).toContain("H9");
+    expect(checkBlockPlacement([entry], block, "Monday", 5, teachers, subjects, grid)).toBeNull();
+    expect(savedFacultyWorkloadIssues([{ ...entry, sessionId: 1 }, { ...entry, id: "E2", period: 3, sessionId: 1 }], teachers, grid)).toEqual([]);
+    expect(savedFacultyWorkloadIssues([{ ...entry, sessionId: 1 }, { ...entry, id: "E2", period: 3, sessionId: 2 }], teachers, grid)[0]).toContain("H9");
+  });
+
+  it("caps a legacy higher limit at 40 and still honors a lower individual limit", () => {
+    const previous = Array.from({ length: 39 }, (_, i) => ({ id: `E${i}`, classId: "C2", subjectId: "S1", teacherId: "T1", day: `Earlier day ${i}`, period: 1 }));
+    expect(checkBlockPlacement(previous, block, "Monday", 1, teachers, subjects, grid)).toContain("40 (H4)");
+    expect(checkBlockPlacement(previous.slice(1), block, "Monday", 1, teachers, subjects, grid)).toBeNull();
+    const lower = new Map([[teacher.id, { ...teacher, weeklyHours: 10 }]]);
+    expect(checkBlockPlacement(previous.slice(0, 9), block, "Monday", 1, lower, subjects, grid)).toContain("10 (H4)");
   });
 });

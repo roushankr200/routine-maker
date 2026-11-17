@@ -13,6 +13,7 @@ import {
   SubjectData,
   TeacherData,
   scheduledWeeklyHours,
+  teacherWeeklyLimit,
   unavailableKey,
 } from "./solver/types.js";
 import { classLabel } from "./demoData.js";
@@ -80,7 +81,8 @@ export async function loadSolverData(departmentId?: string): Promise<SolverDatas
       id,
       name: t.name,
       maxPerDay: t.maxPerDay,
-      weeklyHours: t.weeklyHours,
+      weeklyHours: teacherWeeklyLimit(t),
+      isPlaceholder: t.isPlaceholder,
       subjects: new Set(t.subjects.map((s) => s.toString())),
       unavailable: unavByTeacher.get(id) ?? new Set(),
     });

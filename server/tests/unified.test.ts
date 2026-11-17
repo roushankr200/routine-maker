@@ -200,8 +200,8 @@ describe("unified setup", () => {
     expect(timetabled.every((s) => s.weeklyHours === null)).toBe(true);
 
     const teachers = [
-      { name: "Dr. Prod One", code: "PO", designation: "", maxPerDay: 5, weeklyHours: 80 },
-      { name: "Dr. Prod Two", code: "PT", designation: "", maxPerDay: 5, weeklyHours: 80 },
+      { name: "Dr. Prod One", code: "PO", designation: "", maxPerDay: 5, weeklyHours: 40 },
+      { name: "Dr. Prod Two", code: "PT", designation: "", maxPerDay: 5, weeklyHours: 40 },
     ];
     const bare = await req("POST", "/api/setup/guided", {
       catalogueId: "PROD",

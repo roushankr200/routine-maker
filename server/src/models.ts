@@ -1,4 +1,5 @@
 import mongoose, { HydratedDocument, Schema, Types } from "mongoose";
+import { MAX_TEACHER_WEEKLY_HOURS } from "./solver/types.js";
 
 /**
  * Mongoose models — the MongoDB mirror of the original relational schema:
@@ -84,7 +85,7 @@ const teacherSchema = new Schema<ITeacher>({
   code: { type: String, default: "" },
   designation: { type: String, default: "" },
   maxPerDay: { type: Number, required: true, default: 4 },
-  weeklyHours: { type: Number, required: true, default: 16 },
+  weeklyHours: { type: Number, required: true, default: MAX_TEACHER_WEEKLY_HOURS },
   subjects: [{ type: Schema.Types.ObjectId, ref: "Subject" }],
   isPlaceholder: { type: Boolean, default: false },
 });
@@ -188,6 +189,7 @@ export const TeacherUnavailable = mongoose.model<ITeacherUnavailable>(
 );
 
 export interface IConfig {
+  eightPeriodDefaultApplied?: boolean;
   days: string[];
   periodsPerDay: number;
   lunchAfter: number | null;
@@ -215,11 +217,12 @@ export interface IConfig {
   activeDepartmentId: Types.ObjectId | null;
 }
 const configSchema = new Schema<IConfig>({
+  eightPeriodDefaultApplied: Boolean,
   // NITA pattern (real CSE master routine, ODD 2026): Mon–Fri, hourly
-  // grid of 7 slots, 9:00 start, lunch 1:00–2:00 after P4. Sessions are
+  // grid of 8 slots, 9:00 start, lunch 1:00–2:00 after P4. Sessions are
   // blocks merged across hours (theory 1–2h, labs 2–3h).
   days: { type: [String], default: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] },
-  periodsPerDay: { type: Number, default: 7 },
+  periodsPerDay: { type: Number, default: 8 },
   lunchAfter: { type: Number, default: 4 },
   periodDuration: { type: Number, default: 60 },
   startTime: { type: String, default: "09:00" },

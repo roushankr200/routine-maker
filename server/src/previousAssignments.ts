@@ -2,6 +2,7 @@ import { findDepartmentByName, publishedRoutineScope, scope } from "./department
 import { buildDemoSolverData, DEMO_CLASSES, DEMO_SUBJECTS, DEMO_TEACHERS, parseSemesterNumber } from "./demoData.js";
 import { ClassSection, RoutineEntry, Subject, Teacher } from "./models.js";
 import { solve } from "./solver/solver.js";
+import { teacherWeeklyLimit } from "./solver/types.js";
 
 interface AssignmentRow {
   programme: string;
@@ -59,7 +60,8 @@ export async function previousAssignments(departmentName: string, useCseSample: 
         const teacher = teachersById.get(teacherId);
         const semester = cls?.semesterNumber ?? (cls && parseSemesterNumber(cls.year));
         if (!cls || !subject || !teacher || !semester) return [];
-        const { name, code, designation, weeklyHours } = teacher;
+        const { name, code, designation } = teacher;
+        const weeklyHours = teacherWeeklyLimit(teacher);
         return [{ programme: cls.programme || cls.program, semester, section: cls.section, subjectCode: subject.code,
           syllabusCode: subject.syllabusCode, teacher: { name, code, designation, weeklyHours } }];
       });

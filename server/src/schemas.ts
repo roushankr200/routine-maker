@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_TEACHER_WEEKLY_HOURS } from "./solver/types.js";
 
 export const teacherSchema = z.object({
   name: z.string().trim().min(1, "name is required"),
@@ -6,7 +7,7 @@ export const teacherSchema = z.object({
   code: z.string().trim().max(12).default(""),
   designation: z.string().trim().default(""),
   maxPerDay: z.coerce.number().int().min(0).max(20),
-  weeklyHours: z.coerce.number().int().min(0).max(80),
+  weeklyHours: z.coerce.number().int().min(0).max(MAX_TEACHER_WEEKLY_HOURS),
   subjects: z.array(z.string()).default([]),
 });
 
@@ -60,9 +61,9 @@ export const classSubjectSchema = z.object({
 });
 
 export const configSchema = z.object({
-  days: z.array(z.string().trim().min(1)).min(1).max(7),
-  periodsPerDay: z.coerce.number().int().min(1).max(12),
-  lunchAfter: z.coerce.number().int().min(0).max(12).nullable().default(null),
+  days: z.array(z.string().trim().min(1)).min(1).max(7).default(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]),
+  periodsPerDay: z.coerce.number().int().min(1).max(12).default(8),
+  lunchAfter: z.coerce.number().int().min(0).max(12).nullable().default(4),
   periodDuration: z.coerce.number().int().min(5).max(240).default(60),
   startTime: z
     .string()
@@ -121,7 +122,7 @@ export const balancePreviewSchema = z.object({
       z.object({
         name: z.string().trim().default(""),
         code: z.string().trim().max(12).default(""),
-        weeklyHours: z.coerce.number().int().min(0).max(80),
+        weeklyHours: z.coerce.number().int().min(0).max(MAX_TEACHER_WEEKLY_HOURS),
         /** Courses this teacher can teach — course CODES. */
         subjects: z.array(z.string().trim().min(1)).default([]),
       }),
@@ -202,7 +203,7 @@ export const guidedSetupSchema = z.object({
         designation: z.string().trim().default(""),
         maxPerDay: z.coerce.number().int().min(0).max(20).default(5),
         /** The teacher's weekly max hours — assignments may not exceed it. */
-        weeklyHours: z.coerce.number().int().min(0).max(80),
+        weeklyHours: z.coerce.number().int().min(0).max(MAX_TEACHER_WEEKLY_HOURS),
       }),
     )
     .min(1, "at least one teacher is required")

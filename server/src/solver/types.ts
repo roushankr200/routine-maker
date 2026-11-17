@@ -12,6 +12,7 @@ export interface TeacherData {
   name: string;
   maxPerDay: number;
   weeklyHours: number;
+  isPlaceholder?: boolean;
   /** Subject ids this teacher is eligible to teach (H6). */
   subjects: Set<string>;
   /**
@@ -19,6 +20,22 @@ export interface TeacherData {
    * "Day|*" for a whole day off (H7).
    */
   unavailable: Set<string>;
+}
+
+export const MAX_TEACHER_WEEKLY_HOURS = 40;
+
+export function teacherWeeklyLimit(teacher: { weeklyHours: number; isPlaceholder?: boolean }): number {
+  return teacher.isPlaceholder ? teacher.weeklyHours : Math.min(teacher.weeklyHours, MAX_TEACHER_WEEKLY_HOURS);
+}
+
+export function hasBackToBackSession(
+  start: number,
+  end: number,
+  grid: { periodsPerDay: number; lunchAfter: number | null },
+  busy: (period: number) => boolean,
+): boolean {
+  return (start > 1 && start - 1 !== grid.lunchAfter && busy(start - 1))
+    || (end < grid.periodsPerDay && end !== grid.lunchAfter && busy(end + 1));
 }
 
 export interface SubjectData {

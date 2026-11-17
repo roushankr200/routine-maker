@@ -14,8 +14,8 @@ algorithm, same behaviour, in the stack the author actually works in:
 
 **Product constants vs. per-department content.** One institute —
 **NIT Agartala** — and one **fixed time grid** for every department:
-Mon–Fri, an hourly grid of 7 slots/day from 9:00 AM, lunch 1:00–2:00
-after P4, day ends 5:00 PM. Teaching happens in **block sessions
+Mon–Fri, an hourly grid of 8 slots/day from 9:00 AM, lunch 1:00–2:00
+after P4, day ends 6:00 PM. Teaching happens in **block sessions
 merged across the hourly grid** — theory 1–2 consecutive hours, labs
 2–3 consecutive hours, exactly as on the real sheet (see "Session
 model" below). Those never change. What varies
@@ -63,7 +63,7 @@ the Dashboard and from Setup → "Set up a new department"):
    optional day off.
 5. **Mapping** — for each class, a compact grid of its courses with
    weekly hours (prefilled suggestions: theory 4h, lab 3h; 0 = not
-   taken), with running totals per class (must fit the 35h grid) and
+   taken), with running totals per class (must fit the 40h grid) and
    per-course demand vs teacher capacity.
 6. **Review & Create** — the same validation the Validation page uses
    (demand vs eligible-teacher capacity, grid overflow, courses with
@@ -282,7 +282,7 @@ The Master Routine page reproduces the department's real sheet:
   headed by **clock times** computed from Config's day start +
   period duration (lunch occupies one period-length slot in the
   clock, exactly like the real sheet: P1 9:00–10:00 … P4 12:00–1:00,
-  **LUNCH 1:00–2:00**, P5 2:00–3:00 … P7 4:00–5:00).
+   **LUNCH 1:00–2:00**, P5 2:00–3:00 … P8 5:00–6:00).
 - **Sheet notation in cells** — `SUBJECT - TEACHERCODE`
   (`AI - DJB`, `WCN - MKDB`), with every session **merged across
   its hours** (colSpan = session length): a 2h theory block reads as
@@ -317,11 +317,12 @@ the header comment is the design doc. In short:
    returned to fake success.
 
 Hard rules: **H1** teacher one class/slot · **H2** class one subject/slot ·
-**H3** teacher max/day · **H4** teacher weekly cap (H3/H4 count HOURS,
-since sessions are blocks) · **H5** exact subject hours per class ·
+**H3** teacher max/day · **H4** teacher weekly cap of at most 40 hours
+with lower individual limits supported · **H5** exact subject hours per class ·
 **H6** teacher–subject eligibility · **H7** availability ·
 **H8** lab sessions are single unbroken blocks of their session
-length, never across lunch (no session of any kind crosses lunch).
+length and all sessions stay within one teaching segment · **H9** teachers
+need a free period between separate sessions, with lunch counting as a break.
 Soft preferences (ranking only): **S1** spread a subject's sessions
 across days · **S2** balance teacher load · **S3** avoid middle gaps
 in a class's day · **S4** avoid creating orphan free slots (a lone

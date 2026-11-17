@@ -13,7 +13,7 @@ import { Banner } from "./ui";
 export default function TimeGridForm() {
   const { data, error } = useQuery({ queryKey: ["config"], queryFn: fetchConfig });
   const [days, setDays] = useState("");
-  const [periodsPerDay, setPeriodsPerDay] = useState(7);
+  const [periodsPerDay, setPeriodsPerDay] = useState(8);
   const [lunchAfter, setLunchAfter] = useState<number>(4);
   const [periodDuration, setPeriodDuration] = useState(60);
   const [startTime, setStartTime] = useState("09:00");
@@ -81,7 +81,7 @@ export default function TimeGridForm() {
           </div>
           <p className="text-xs text-muted">
             Institute is fixed: <strong>NIT Agartala</strong>. The time grid below is the
-            institute-fixed NITA standard (Mon–Fri, hourly grid of 7 slots, 9:00 AM–5:00 PM,
+            default NITA grid (Mon–Fri, eight hourly slots, 9:00 AM–6:00 PM,
             lunch 1:00–2:00 after P4) — the same for every department. Sessions are blocks
             merged across these hourly slots (theory 1–2h, labs 2–3h; set per subject).
           </p>

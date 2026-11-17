@@ -13,7 +13,7 @@ import type { Teacher } from "../types";
 import { Banner, PageTitle } from "../components/ui";
 import { initialsCode } from "../utils/time";
 
-const empty: Partial<Teacher> = { name: "", code: "", designation: "", maxPerDay: 4, weeklyHours: 16, subjects: [] };
+const empty: Partial<Teacher> = { name: "", code: "", designation: "", maxPerDay: 4, weeklyHours: 40, subjects: [] };
 
 export default function Teachers() {
   const qc = useQueryClient();
@@ -101,8 +101,8 @@ export default function Teachers() {
           </div>
           <div>
             <label className="label" htmlFor="t-week">Weekly hours (H4)</label>
-            <input id="t-week" className="input" type="number" min={0} max={80} required
-              value={form.weeklyHours ?? 16}
+            <input id="t-week" className="input" type="number" min={0} max={40} required
+              value={form.weeklyHours ?? 40}
               onChange={(e) => setForm({ ...form, weeklyHours: Number(e.target.value) })} />
           </div>
         </div>
